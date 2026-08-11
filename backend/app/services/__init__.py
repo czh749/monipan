@@ -12,7 +12,9 @@
   - formatters  : ORM 对象格式化为前端友好的字典
 
 - trading.py : 交易引擎
-  - get_demo_account(db)         : 获取 demo 用户的模拟账户
   - calculate_fee(side, amount)  : 计算交易手续费（佣金 + 印花税）
   - place_market_order(db, ...)  : 执行市价委托（买入/卖出）
+
+- documents.py : 官方 PDF 按需下载、逐页文字抽取与正文缓存
+- document_search.py : 保留页码与字符位置的正文分段和关键词检索
 """

@@ -30,6 +30,13 @@ from .constants import (
 )
 from .eastmoney import fetch_eastmoney_indices, fetch_eastmoney_quotes
 from .formatters import market_index_values, stock_values
+from .history import (
+    HISTORY_CACHE_TARGET_BARS,
+    backfill_stock_history_once,
+    fetch_eastmoney_history,
+    stock_history,
+    upsert_latest_stock_bar,
+)
 from .session import is_a_share_session, market_refresh_interval, market_session
 from .status import market_status_values
 from .tick import tick_market, tick_market_indices
@@ -40,10 +47,13 @@ __all__ = [
     "EASTMONEY_FAILURE_PAUSE_SECONDS",
     "EASTMONEY_QUOTE_URLS",
     "EASTMONEY_RETRY_COOLDOWN_SECONDS",
+    "HISTORY_CACHE_TARGET_BARS",
     "MARKET_REFRESH_STATE",
     "MarketDataError",
     "fetch_eastmoney_indices",
     "fetch_eastmoney_quotes",
+    "fetch_eastmoney_history",
+    "backfill_stock_history_once",
     "is_a_share_session",
     "market_index_values",
     "market_refresh_interval",
@@ -52,6 +62,8 @@ __all__ = [
     "random",
     "requests",
     "stock_values",
+    "stock_history",
+    "upsert_latest_stock_bar",
     "tick_market",
     "tick_market_indices",
     "time",

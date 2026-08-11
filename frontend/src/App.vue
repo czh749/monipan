@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import AuthGateway from './components/AuthGateway.vue'
 import MarketMatrix from './components/MarketMatrix.vue'
+import OrderConfirmation from './components/OrderConfirmation.vue'
 import OrderTicket from './components/OrderTicket.vue'
+import StockAnalysisWorkspace from './components/StockAnalysisWorkspace.vue'
+import StockDetailsDrawer from './components/StockDetailsDrawer.vue'
 import TradingRecords from './components/TradingRecords.vue'
+import { api } from './api'
 import { useMarketData } from './composables/useMarketData'
 import { useTrading } from './composables/useTrading'
-import type { Stock } from './types'
+import { useWatchlist } from './composables/useWatchlist'
+import type { AuthRequest, CurrentUser, OrderPreview, Stock } from './types'
 import {
   compactTurnover,
   formatNumber,
@@ -45,25 +51,49 @@ const {
   initializeTrading,
   refreshHistory,
   placeOrder,
+  cancelOrder,
   clearError: clearTradingError,
+  resetTrading,
 } = useTrading()
+
+const {
+  symbols: watchlistSymbols,
+  error: watchlistError,
+  loadWatchlist,
+  toggleWatchlist,
+  resetWatchlist,
+} = useWatchlist()
 
 const selectedSymbol = ref('600519')
 const side = ref<'BUY' | 'SELL'>('BUY')
+const orderType = ref<'MARKET' | 'LIMIT'>('MARKET')
+const limitPrice = ref(0)
 const quantity = ref(100)
 const activeTab = ref<TradingTab>('positions')
 const orderNotice = ref<OrderNotice | null>(null)
 const currentTime = ref(Date.now())
+const orderPreview = ref<OrderPreview | null>(null)
+const previewLoading = ref(false)
+const confirmationOpen = ref(false)
+const detailOpen = ref(false)
+const analysisOpen = ref(false)
+const currentUser = ref<CurrentUser | null>(null)
+const authChecking = ref(true)
+const authSubmitting = ref(false)
+const authError = ref('')
 let clockTimer: number | undefined
 let orderNoticeTimer: number | undefined
+let previewTimer: number | undefined
+let previewRequestId = 0
 
-const error = computed(() => marketError.value || tradingError.value)
+const error = computed(() => marketError.value || tradingError.value || watchlistError.value)
 const selectedStock = computed(() =>
   stocks.value.find((stock) => stock.symbol === selectedSymbol.value),
 )
 const selectedPosition = computed(() =>
   positions.value.find((position) => position.symbol === selectedSymbol.value),
 )
+const positionSymbols = computed(() => positions.value.map((position) => position.symbol))
 
 const positionRatio = computed(() => {
   if (!account.value) return 0
@@ -111,6 +141,7 @@ function indexPulseStyle(value: string | number) {
 
 function clearError() {
   marketError.value = ''
+  watchlistError.value = ''
   clearTradingError()
 }
 
@@ -129,6 +160,27 @@ function selectStock(stock: Stock) {
   selectedSymbol.value = stock.symbol
 }
 
+function showStockDetails(stock: Stock) {
+  selectedSymbol.value = stock.symbol
+  detailOpen.value = true
+}
+
+function prepareOrderFromDrawer(orderSide: 'BUY' | 'SELL') {
+  side.value = orderSide
+  detailOpen.value = false
+  window.scrollTo({ top: 180, behavior: 'smooth' })
+}
+
+function openStockAnalysis() {
+  detailOpen.value = false
+  analysisOpen.value = true
+}
+
+function closeStockAnalysis() {
+  analysisOpen.value = false
+  detailOpen.value = true
+}
+
 function chooseForSell(symbol: string) {
   selectedSymbol.value = symbol
   side.value = 'SELL'
@@ -140,7 +192,39 @@ function setActiveTab(tab: TradingTab) {
   if (tab !== 'positions') void refreshHistory()
 }
 
-async function submitOrder() {
+async function refreshOrderPreview() {
+  const stock = selectedStock.value
+  if (!currentUser.value || !stock || quantity.value <= 0 || quantity.value % 100 !== 0 || (orderType.value === 'LIMIT' && limitPrice.value <= 0)) {
+    orderPreview.value = null
+    return
+  }
+  const requestId = ++previewRequestId
+  previewLoading.value = true
+  try {
+    const result = await api.previewOrder({
+      symbol: stock.symbol,
+      side: side.value,
+      quantity: quantity.value,
+      order_type: orderType.value,
+      ...(orderType.value === 'LIMIT' ? { limit_price: limitPrice.value } : {}),
+    })
+    if (requestId === previewRequestId) orderPreview.value = result
+  } catch (reason) {
+    if (requestId === previewRequestId) {
+      orderPreview.value = null
+      showOrderNotice({
+        kind: 'error',
+        title: '委托校验失败',
+        message: reason instanceof Error ? reason.message : '无法取得下单预览',
+        meta: stock.symbol,
+      })
+    }
+  } finally {
+    if (requestId === previewRequestId) previewLoading.value = false
+  }
+}
+
+function reviewOrder() {
   if (!selectedStock.value || quantity.value <= 0 || quantity.value % 100 !== 0) {
     showOrderNotice({
       kind: 'error',
@@ -153,18 +237,43 @@ async function submitOrder() {
     return
   }
 
+  if (!orderPreview.value?.allowed) {
+    showOrderNotice({
+      kind: 'error',
+      title: '委托未通过校验',
+      message: orderPreview.value?.blocking_reason ?? '请等待风险预览完成',
+      meta: selectedStock.value.symbol,
+    })
+    return
+  }
+  confirmationOpen.value = true
+}
+
+async function confirmOrder() {
+  if (!selectedStock.value || !orderPreview.value) return
   const stock = selectedStock.value
   const orderSide = side.value
   const orderQuantity = quantity.value
   try {
-    const order = await placeOrder(stock.symbol, orderSide, orderQuantity)
+    const order = await placeOrder({
+      symbol: stock.symbol,
+      side: orderSide,
+      quantity: orderQuantity,
+      order_type: orderType.value,
+      ...(orderType.value === 'LIMIT' ? { limit_price: limitPrice.value } : {}),
+    })
     if (!order) return
+    confirmationOpen.value = false
+    const pending = order.status === 'PENDING'
     showOrderNotice({
       kind: 'success',
-      title: `${orderSide === 'BUY' ? '买入' : '卖出'}已成交`,
-      message: `${stock.name} ${orderQuantity.toLocaleString('zh-CN')} 股 · ¥ ${formatNumber(order.price)}`,
+      title: pending ? '限价委托已进入队列' : `${orderSide === 'BUY' ? '买入' : '卖出'}已成交`,
+      message: pending
+        ? `${stock.name} ${orderQuantity.toLocaleString('zh-CN')} 股 · 限价 ¥ ${formatNumber(order.limit_price ?? order.price)}`
+        : `${stock.name} ${orderQuantity.toLocaleString('zh-CN')} 股 · ¥ ${formatNumber(order.price)}`,
       meta: `订单 ${order.order_no}`,
     })
+    await refreshOrderPreview()
   } catch (reason) {
     showOrderNotice({
       kind: 'error',
@@ -175,8 +284,70 @@ async function submitOrder() {
   }
 }
 
+async function handleCancelOrder(orderNo: string) {
+  try {
+    await cancelOrder(orderNo)
+    showOrderNotice({ kind: 'success', title: '委托已撤销', message: '待成交委托已从撮合队列移除', meta: orderNo })
+    await refreshOrderPreview()
+  } catch (reason) {
+    showOrderNotice({ kind: 'error', title: '撤单失败', message: reason instanceof Error ? reason.message : '无法撤销委托', meta: orderNo })
+  }
+}
+
+async function initializePrivateWorkspace() {
+  await Promise.all([initializeTrading(), loadWatchlist()])
+  await refreshOrderPreview()
+}
+
+async function handleAuthenticate(mode: 'login' | 'register', payload: AuthRequest) {
+  if (authSubmitting.value) return
+  authSubmitting.value = true
+  authError.value = ''
+  try {
+    currentUser.value = mode === 'login'
+      ? await api.login(payload)
+      : await api.register(payload)
+    await initializePrivateWorkspace()
+  } catch (reason) {
+    authError.value = reason instanceof Error ? reason.message : '认证失败，请稍后重试'
+  } finally {
+    authSubmitting.value = false
+  }
+}
+
+async function handleLogout() {
+  try {
+    await api.logout()
+  } finally {
+    currentUser.value = null
+    authError.value = ''
+    resetTrading()
+    resetWatchlist()
+    confirmationOpen.value = false
+    detailOpen.value = false
+    analysisOpen.value = false
+  }
+}
+
+watch(selectedStock, (stock, previous) => {
+  if (stock && stock.symbol !== previous?.symbol) limitPrice.value = Number(stock.price)
+}, { immediate: true })
+
+watch([selectedSymbol, side, quantity, orderType, limitPrice, account, positions, orders], () => {
+  window.clearTimeout(previewTimer)
+  previewTimer = window.setTimeout(() => void refreshOrderPreview(), 180)
+})
+
 onMounted(async () => {
-  await Promise.all([startMarketPolling(), initializeTrading()])
+  void startMarketPolling()
+  try {
+    currentUser.value = await api.currentUser()
+    await initializePrivateWorkspace()
+  } catch {
+    currentUser.value = null
+  } finally {
+    authChecking.value = false
+  }
   clockTimer = window.setInterval(() => (currentTime.value = Date.now()), 1000)
 })
 
@@ -184,6 +355,7 @@ onBeforeUnmount(() => {
   stopMarketPolling()
   window.clearInterval(clockTimer)
   window.clearTimeout(orderNoticeTimer)
+  window.clearTimeout(previewTimer)
 })
 </script>
 
@@ -208,13 +380,30 @@ onBeforeUnmount(() => {
           {{ marketStatus ? `${marketStatus.session_label} · 新鲜 ${marketStatus.fresh_count}/${marketStatus.total_count}` : '等待状态数据' }}
         </span>
       </div>
-      <div class="user-chip">
-        <span class="avatar">演</span>
-        <div><strong>演示账户</strong><small>初始资金 ¥1,000,000</small></div>
+      <div class="user-chip" :class="{ anonymous: !currentUser }">
+        <span class="avatar">{{ currentUser?.username.slice(0, 1).toUpperCase() ?? '访' }}</span>
+        <div>
+          <strong>{{ currentUser?.username ?? '访客模式' }}</strong>
+          <small>{{ currentUser ? `初始资金 ¥${Number(currentUser.initial_cash).toLocaleString('zh-CN')}` : '请登录交易席位' }}</small>
+        </div>
+        <button v-if="currentUser" class="logout-button" type="button" @click="handleLogout">退出</button>
       </div>
     </header>
 
-    <main>
+    <main v-if="authChecking" class="auth-loading-shell" aria-live="polite">
+      <span class="auth-loading-mark">MP</span>
+      <strong>正在核验交易席位…</strong>
+    </main>
+
+    <main v-else-if="!currentUser" class="auth-main">
+      <AuthGateway
+        :loading="authSubmitting"
+        :error="authError"
+        @authenticate="handleAuthenticate"
+      />
+    </main>
+
+    <main v-else>
       <section v-if="selectedStock" class="market-tape" :class="marketStatusClass" aria-label="行情可信度">
         <div class="feed-health">
           <div class="feed-health-main">
@@ -238,6 +427,12 @@ onBeforeUnmount(() => {
           <small :class="riseClass(selectedStock.change)">
             {{ Number(selectedStock.change_percent) >= 0 ? '+' : '' }}{{ formatNumber(selectedStock.change_percent) }}%
           </small>
+          <button
+            type="button"
+            class="focus-detail-action"
+            :aria-label="`打开${selectedStock.name}研究详情`"
+            @click="showStockDetails(selectedStock)"
+          >研究详情 <span aria-hidden="true">↗</span></button>
         </div>
         <div class="tape-item">
           <span>数据来源</span>
@@ -313,7 +508,7 @@ onBeforeUnmount(() => {
         <article class="equity-console">
           <div class="console-heading">
             <div><span class="section-kicker">TOTAL EQUITY</span><h2>账户净值</h2></div>
-            <span class="console-code">CNY / DEMO-01</span>
+            <span class="console-code">CNY / {{ currentUser.username.toUpperCase() }}</span>
           </div>
           <div class="equity-value">¥ {{ formatNumber(account.total_assets) }}</div>
           <div class="equity-footer">
@@ -411,18 +606,26 @@ onBeforeUnmount(() => {
           :selected-symbol="selectedSymbol"
           :total-count="marketStatus?.total_count ?? stocks.length"
           :loading="marketLoading"
+          :watchlist-symbols="watchlistSymbols"
+          :position-symbols="positionSymbols"
           @select="selectStock"
+          @toggle-watchlist="toggleWatchlist"
+          @show-details="showStockDetails"
         />
         <OrderTicket
           v-model:side="side"
+          v-model:order-type="orderType"
+          v-model:limit-price="limitPrice"
           v-model:quantity="quantity"
           :stock="selectedStock"
           :market-status="marketStatus"
           :account="account"
           :position="selectedPosition"
+          :preview="orderPreview"
+          :preview-loading="previewLoading"
           :submitting="submitting"
           :current-time="currentTime"
-          @submit="submitOrder"
+          @submit="reviewOrder"
         />
       </section>
 
@@ -433,8 +636,34 @@ onBeforeUnmount(() => {
         :active-tab="activeTab"
         @update:active-tab="setActiveTab"
         @choose-for-sell="chooseForSell"
+        @cancel-order="handleCancelOrder"
       />
     </main>
+
+    <StockDetailsDrawer
+      :open="detailOpen"
+      :stock="selectedStock"
+      :position="selectedPosition"
+      @close="detailOpen = false"
+      @prepare-order="prepareOrderFromDrawer"
+      @open-analysis="openStockAnalysis"
+    />
+
+    <StockAnalysisWorkspace
+      :open="analysisOpen"
+      :stock="selectedStock"
+      :position="selectedPosition"
+      @close="closeStockAnalysis"
+    />
+
+    <OrderConfirmation
+      v-if="confirmationOpen && selectedStock && orderPreview"
+      :stock="selectedStock"
+      :preview="orderPreview"
+      :submitting="submitting"
+      @close="confirmationOpen = false"
+      @confirm="confirmOrder"
+    />
 
     <footer>
       <span>MONIPAN / MARKET PRACTICE SYSTEM</span>

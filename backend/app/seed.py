@@ -5,23 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .market_index_pool import MARKET_INDEX_POOL
-from .models import MarketIndex, SimulationAccount, Stock, User
+from .models import MarketIndex, Stock
 from .stock_pool import STOCK_POOL
 
 
 def seed_database(db: Session) -> None:
-    if not db.scalar(select(User).where(User.username == "demo")):
-        user = User(username="demo")
-        db.add(user)
-        db.flush()
-        db.add(
-            SimulationAccount(
-                user_id=user.id,
-                initial_cash=Decimal("1000000.00"),
-                available_cash=Decimal("1000000.00"),
-            )
-        )
-
     # 按代码补齐股票池，而不是仅在空表时初始化。这样已有的 100 只股票、
     # 持仓和历史交易都会保留，升级后只新增缺少的 100 只。
     existing_symbols = set(db.scalars(select(Stock.symbol)).all())

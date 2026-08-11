@@ -9,7 +9,6 @@ RESTful API 路由层。
         GET  /api/stocks/{symbol}  — 单只股票详情
         GET  /api/market/indices   — 五个主要 A 股指数
         GET  /api/market/status    — 行情源、更新时间与新鲜度状态
-        POST /api/market/tick      — 手动触发一次行情刷新
 
     账户与持仓
         GET  /api/account          — 账户概览（总资产、盈亏、收益率）
@@ -26,32 +25,77 @@ RESTful API 路由层。
 """
 
 from decimal import Decimal
+import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
+from .auth import (
+    clear_session_cookie,
+    get_current_account,
+    get_current_session,
+    get_current_user,
+    issue_session,
+    register_user,
+    revoke_session,
+    set_session_cookie,
+    user_values,
+    verify_credentials,
+)
 from .database import get_db
-from .models import MarketIndex, Order, Position, Stock, Trade
+from .models import AuthSession, MarketIndex, Order, Position, SimulationAccount, Stock, Trade, User, WatchlistItem
+from .rate_limit import (
+    acquire_analysis_lease,
+    clear_fixed_window,
+    client_ip,
+    enforce_fixed_window,
+    release_analysis_lease,
+)
+from .agent.orchestrator import (
+    AgentOrchestrationError,
+    StockAnalysisOptions,
+    agent_run_values,
+    analyze_stock,
+    load_agent_run,
+)
 from .schemas import (
     AccountOut,
+    AgentRunOut,
+    CurrentUserOut,
+    LoginIn,
     MarketIndexOut,
     MarketStatusOut,
     OrderCreate,
     OrderOut,
+    OrderPreviewOut,
     PositionOut,
+    RegisterIn,
+    StockAnalysisCreate,
+    StockHistoryOut,
+    StockAnnouncementsOut,
+    StockFundamentalsOut,
+    StockRegulatoryLettersOut,
     StockOut,
     TradeOut,
+    WatchlistItemOut,
 )
+from .services.announcements import AnnouncementDataError, announcements_for_stock
+from .services.fundamentals import FundamentalsDataError, fundamentals_for_stock
+from .services.regulatory import RegulatoryDataError, regulatory_letters_for_stock
 from .services.market import (
-    MarketDataError,
+    HISTORY_CACHE_TARGET_BARS,
     market_index_values,
     market_status_values,
+    stock_history,
     stock_values,
-    tick_market,
-    tick_market_indices,
 )
-from .services.trading import get_demo_account, place_market_order
+from .services.trading import (
+    build_order_preview,
+    cancel_order,
+    place_order,
+    position_sellable_values,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +103,106 @@ from .services.trading import get_demo_account, place_market_order
 # ---------------------------------------------------------------------------
 # 所有端点自动添加 /api 前缀
 router = APIRouter(prefix="/api")
+
+REGISTER_IP_LIMIT = max(1, int(os.getenv("MONIPAN_REGISTER_IP_LIMIT", "3")))
+REGISTER_WINDOW_SECONDS = max(
+    60,
+    int(os.getenv("MONIPAN_REGISTER_WINDOW_SECONDS", "3600")),
+)
+LOGIN_IP_LIMIT = max(1, int(os.getenv("MONIPAN_LOGIN_IP_LIMIT", "10")))
+LOGIN_IP_WINDOW_SECONDS = max(
+    60,
+    int(os.getenv("MONIPAN_LOGIN_IP_WINDOW_SECONDS", "60")),
+)
+LOGIN_FAILURE_LIMIT = max(
+    1,
+    int(os.getenv("MONIPAN_LOGIN_FAILURE_LIMIT", "5")),
+)
+LOGIN_FAILURE_WINDOW_SECONDS = max(
+    60,
+    int(os.getenv("MONIPAN_LOGIN_FAILURE_WINDOW_SECONDS", "900")),
+)
+AI_USER_24H_LIMIT = max(1, int(os.getenv("MONIPAN_AI_USER_24H_LIMIT", "5")))
+AI_IP_HOURLY_LIMIT = max(1, int(os.getenv("MONIPAN_AI_IP_HOURLY_LIMIT", "20")))
+AI_GLOBAL_CONCURRENCY = max(
+    1,
+    int(os.getenv("MONIPAN_AI_GLOBAL_CONCURRENCY", "2")),
+)
+AI_CONCURRENCY_TTL_SECONDS = max(
+    60,
+    int(os.getenv("MONIPAN_AI_CONCURRENCY_TTL_SECONDS", "180")),
+)
+
+
+# ===========================================================================
+# 网站用户认证
+# ===========================================================================
+
+@router.post("/auth/register", response_model=CurrentUserOut, status_code=201)
+def register(
+    payload: RegisterIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict:
+    enforce_fixed_window(
+        scope="auth_register_ip",
+        identity=client_ip(request),
+        limit=REGISTER_IP_LIMIT,
+        window_seconds=REGISTER_WINDOW_SECONDS,
+        message="注册尝试过于频繁，请稍后再试",
+    )
+    user = register_user(db, payload)
+    set_session_cookie(response, issue_session(db, user))
+    return user_values(user)
+
+
+@router.post("/auth/login", response_model=CurrentUserOut)
+def login(
+    payload: LoginIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict:
+    enforce_fixed_window(
+        scope="auth_login_ip",
+        identity=client_ip(request),
+        limit=LOGIN_IP_LIMIT,
+        window_seconds=LOGIN_IP_WINDOW_SECONDS,
+        message="登录请求过于频繁，请稍后再试",
+    )
+    try:
+        user = verify_credentials(db, payload.username, payload.password)
+    except HTTPException:
+        enforce_fixed_window(
+            scope="auth_login_username_failure",
+            identity=payload.username,
+            limit=LOGIN_FAILURE_LIMIT,
+            window_seconds=LOGIN_FAILURE_WINDOW_SECONDS,
+            message="该账号登录失败次数过多，请稍后再试",
+        )
+        raise
+    clear_fixed_window(
+        scope="auth_login_username_failure",
+        identity=payload.username,
+    )
+    set_session_cookie(response, issue_session(db, user))
+    return user_values(user)
+
+
+@router.get("/auth/me", response_model=CurrentUserOut)
+def current_user(user: User = Depends(get_current_user)) -> dict:
+    return user_values(user)
+
+
+@router.post("/auth/logout", status_code=204)
+def logout(
+    response: Response,
+    session: AuthSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> None:
+    revoke_session(db, session)
+    clear_session_cookie(response)
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +228,14 @@ def order_values(order: Order) -> dict:
         "stock_name": order.stock.name,       # 股票名称
         "side": order.side,                   # 买卖方向
         "order_type": order.order_type,       # 订单类型
+        "limit_price": order.limit_price,
         "quantity": order.quantity,           # 委托数量
         "filled_quantity": order.filled_quantity,  # 已成交数量
         "price": order.price,                 # 成交价格
         "fee": order.fee,                     # 交易费用
         "status": order.status,               # 订单状态
         "reject_reason": order.reject_reason, # 拒绝原因
+        "cancelable": order.status == "PENDING",
         "created_at": order.created_at,       # 创建时间
     }
 
@@ -161,6 +307,244 @@ def get_stock(symbol: str, db: Session = Depends(get_db)) -> dict:
     return stock_values(stock)
 
 
+@router.get("/stocks/{symbol}/history", response_model=StockHistoryOut)
+def get_stock_history(
+    symbol: str,
+    limit: int = Query(default=90, ge=20, le=240),
+    db: Session = Depends(get_db),
+) -> dict:
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    if not stock:
+        raise HTTPException(status_code=404, detail="股票不存在")
+    source, bars = stock_history(db, stock, limit)
+    target_count = min(limit, HISTORY_CACHE_TARGET_BARS)
+    return {
+        "symbol": symbol,
+        "period": "DAY",
+        "source": source,
+        "cached_count": len(bars),
+        "target_count": target_count,
+        "complete": len(bars) >= target_count,
+        "bars": [
+            {
+                "trade_date": bar.trade_date,
+                "open_price": bar.open_price,
+                "high_price": bar.high_price,
+                "low_price": bar.low_price,
+                "close_price": bar.close_price,
+                "volume": bar.volume,
+                "turnover": bar.turnover,
+            }
+            for bar in bars
+        ],
+    }
+
+
+@router.get(
+    "/stocks/{symbol}/fundamentals",
+    response_model=StockFundamentalsOut,
+)
+def get_stock_fundamentals(
+    symbol: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return normalized reports and performance events from a local cache."""
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    if not stock:
+        raise HTTPException(status_code=404, detail="股票不存在")
+    try:
+        return fundamentals_for_stock(db, stock)
+    except FundamentalsDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get(
+    "/stocks/{symbol}/announcements",
+    response_model=StockAnnouncementsOut,
+)
+def get_stock_announcements(
+    symbol: str,
+    days: int = Query(default=365, ge=30, le=1095),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return official exchange announcement metadata from an on-demand cache."""
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    if not stock:
+        raise HTTPException(status_code=404, detail="股票不存在")
+    if stock.exchange not in {"SSE", "SZSE"}:
+        raise HTTPException(
+            status_code=400,
+            detail="当前公告数据源仅支持上交所和深交所股票",
+        )
+    try:
+        return announcements_for_stock(db, stock, days=days, limit=limit)
+    except AnnouncementDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get(
+    "/stocks/{symbol}/regulatory-letters",
+    response_model=StockRegulatoryLettersOut,
+)
+def get_stock_regulatory_letters(
+    symbol: str,
+    days: int = Query(default=365, ge=30, le=1095),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return official exchange inquiry letters and linked company replies."""
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    if not stock:
+        raise HTTPException(status_code=404, detail="股票不存在")
+    if stock.exchange not in {"SSE", "SZSE"}:
+        raise HTTPException(
+            status_code=400,
+            detail="当前监管函件数据源仅支持上交所和深交所股票",
+        )
+    try:
+        return regulatory_letters_for_stock(db, stock, days=days, limit=limit)
+    except RegulatoryDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# ===========================================================================
+# 单股 AI 风险分析（固定调用八个只读工具，永不下单）
+# ===========================================================================
+
+@router.post(
+    "/agent/stocks/{symbol}/analyze",
+    response_model=AgentRunOut,
+    status_code=201,
+)
+def analyze_stock_endpoint(
+    symbol: str,
+    payload: StockAnalysisCreate,
+    request: Request,
+    user: User = Depends(get_current_user),
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    if stock is None:
+        raise HTTPException(status_code=404, detail="股票不存在")
+
+    enforce_fixed_window(
+        scope="ai_user_24h",
+        identity=str(user.id),
+        limit=AI_USER_24H_LIMIT,
+        window_seconds=24 * 60 * 60,
+        message=f"每个账号 24 小时最多进行 {AI_USER_24H_LIMIT} 次 AI 分析",
+    )
+    enforce_fixed_window(
+        scope="ai_ip_hourly",
+        identity=client_ip(request),
+        limit=AI_IP_HOURLY_LIMIT,
+        window_seconds=60 * 60,
+        message="当前网络的 AI 分析请求过于频繁，请稍后再试",
+    )
+    lease = acquire_analysis_lease(
+        user_id=user.id,
+        global_limit=AI_GLOBAL_CONCURRENCY,
+        ttl_seconds=AI_CONCURRENCY_TTL_SECONDS,
+    )
+    try:
+        run = analyze_stock(
+            db,
+            user=user,
+            account=account,
+            stock=stock,
+            options=StockAnalysisOptions(
+                question=payload.question,
+                focus_keywords=payload.focus_keywords,
+                history_days=payload.history_days,
+                disclosure_days=payload.disclosure_days,
+                news_days=payload.news_days,
+                max_documents=payload.max_documents,
+            ),
+        )
+    except AgentOrchestrationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "run_id": exc.run_id,
+            },
+        ) from exc
+    finally:
+        release_analysis_lease(lease)
+    stored = load_agent_run(db, run_id=run.id, user_id=user.id)
+    if stored is None:
+        raise HTTPException(status_code=500, detail="分析结果保存后无法读取")
+    return agent_run_values(stored)
+
+
+@router.get("/agent/runs/{run_id}", response_model=AgentRunOut)
+def get_agent_run_endpoint(
+    run_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    run = load_agent_run(db, run_id=run_id, user_id=user.id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="分析记录不存在")
+    return agent_run_values(run)
+
+
+@router.get("/watchlist", response_model=list[WatchlistItemOut])
+def list_watchlist(
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    items = db.scalars(
+        select(WatchlistItem)
+        .where(WatchlistItem.account_id == account.id)
+        .options(joinedload(WatchlistItem.stock))
+        .order_by(WatchlistItem.created_at.desc())
+    ).all()
+    return [{"symbol": item.stock.symbol, "created_at": item.created_at} for item in items]
+
+
+@router.post("/watchlist/{symbol}", response_model=WatchlistItemOut, status_code=201)
+def add_watchlist_item(
+    symbol: str,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    if not stock:
+        raise HTTPException(status_code=404, detail="股票不存在")
+    item = db.scalar(
+        select(WatchlistItem).where(
+            WatchlistItem.account_id == account.id,
+            WatchlistItem.stock_id == stock.id,
+        )
+    )
+    if item is None:
+        item = WatchlistItem(account_id=account.id, stock_id=stock.id)
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+    return {"symbol": stock.symbol, "created_at": item.created_at}
+
+
+@router.delete("/watchlist/{symbol}", status_code=204)
+def remove_watchlist_item(
+    symbol: str,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> None:
+    item = db.scalar(
+        select(WatchlistItem)
+        .join(Stock, WatchlistItem.stock_id == Stock.id)
+        .where(WatchlistItem.account_id == account.id, Stock.symbol == symbol)
+    )
+    if item is not None:
+        db.delete(item)
+        db.commit()
+
+
 @router.get("/market/status", response_model=MarketStatusOut)
 def market_status(db: Session = Depends(get_db)) -> dict:
     """返回行情来源、最近刷新、覆盖率和时段感知的新鲜度状态。"""
@@ -178,45 +562,20 @@ def market_indices(db: Session = Depends(get_db)) -> list[dict]:
     return [market_index_values(item) for item in items]
 
 
-@router.post("/market/tick", response_model=list[StockOut])
-def refresh_market(db: Session = Depends(get_db)) -> list[dict]:
-    """
-    手动触发一次行情刷新。
-
-    立即执行一次 tick_market()，然后返回刷新后的全部股票行情。
-    用于前端手动刷新按钮或调试。
-
-    注意：后台已经有按配置自动刷新的 market_loop，
-    此端点只是提供了手动即时刷新的能力。
-    """
-    try:
-        tick_market_indices(db)
-        tick_market(db)
-    except MarketDataError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    # 返回刷新后的行情数据
-    return [
-        stock_values(stock)
-        for stock in db.scalars(
-            select(Stock)
-            .where(Stock.price > 0, Stock.prev_close > 0)
-            .order_by(Stock.symbol)
-        ).all()
-    ]
-
-
 # ===========================================================================
 # 账户与持仓
 # ===========================================================================
 
 @router.get("/account", response_model=AccountOut)
-def account_summary(db: Session = Depends(get_db)) -> dict:
+def account_summary(
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
     """
     获取账户概览信息。
 
     计算逻辑：
-        1. 获取 demo 用户的模拟账户
+        1. 获取当前登录用户的模拟账户
         2. 查询所有持仓（quantity > 0）
         3. 计算持仓总市值 = Σ(当前价 × 持仓数量)
         4. 总资产 = 可用资金 + 持仓市值
@@ -225,9 +584,6 @@ def account_summary(db: Session = Depends(get_db)) -> dict:
 
     前端用此数据渲染顶部资产概览卡片。
     """
-    # 获取 demo 账户
-    account = get_demo_account(db)
-
     # 查询所有有效持仓（quantity > 0），预加载股票信息
     positions = db.scalars(
         select(Position)
@@ -269,7 +625,10 @@ def account_summary(db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/positions", response_model=list[PositionOut])
-def list_positions(db: Session = Depends(get_db)) -> dict:
+def list_positions(
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> list[dict]:
     """
     获取持仓列表。
 
@@ -282,9 +641,6 @@ def list_positions(db: Session = Depends(get_db)) -> dict:
 
     前端用此数据渲染"当前持仓" Tab。
     """
-    # 获取 demo 账户
-    account = get_demo_account(db)
-
     # 查询所有有效持仓，预加载股票信息，按更新时间倒序
     positions = db.scalars(
         select(Position)
@@ -317,6 +673,9 @@ def list_positions(db: Session = Depends(get_db)) -> dict:
             "symbol": position.stock.symbol,          # 股票代码
             "stock_name": position.stock.name,        # 股票名称
             "quantity": position.quantity,            # 持仓数量
+            "sellable_quantity": position_sellable_values(
+                db, account.id, position
+            )[2],
             "average_cost": position.average_cost,    # 持仓均价
             "current_price": position.stock.price,    # 当前市价
             "market_value": market_value,             # 当前市值
@@ -332,7 +691,18 @@ def list_positions(db: Session = Depends(get_db)) -> dict:
 # ===========================================================================
 
 @router.post("/orders", response_model=OrderOut, status_code=201)
-def create_order(payload: OrderCreate, db: Session = Depends(get_db)) -> dict:
+def create_order(
+    payload: OrderCreate,
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=16,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    ),
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
     """
     创建交易订单（市价买入或卖出）。
 
@@ -353,14 +723,52 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)) -> dict:
     注意：当前版本为市价单，提交即成交，无需轮询订单状态。
     """
     # 调用交易引擎执行下单
-    order = place_market_order(db, payload.symbol, payload.side, payload.quantity)
+    order = place_order(
+        db,
+        account,
+        payload.symbol,
+        payload.side,
+        payload.quantity,
+        payload.order_type,
+        payload.limit_price,
+        idempotency_key,
+    )
 
     # 格式化并返回订单信息
     return order_values(order)
 
 
+@router.post("/orders/preview", response_model=OrderPreviewOut)
+def preview_order(
+    payload: OrderCreate,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    return build_order_preview(
+        db,
+        account,
+        payload.symbol,
+        payload.side,
+        payload.quantity,
+        payload.order_type,
+        payload.limit_price,
+    )
+
+
+@router.post("/orders/{order_no}/cancel", response_model=OrderOut)
+def cancel_pending_order(
+    order_no: str,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    return order_values(cancel_order(db, account, order_no))
+
+
 @router.get("/orders", response_model=list[OrderOut])
-def list_orders(db: Session = Depends(get_db)) -> list[dict]:
+def list_orders(
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> list[dict]:
     """
     获取订单列表（最近 100 条）。
 
@@ -369,9 +777,6 @@ def list_orders(db: Session = Depends(get_db)) -> list[dict]:
 
     前端用此数据渲染"委托记录" Tab。
     """
-    # 获取 demo 账户
-    account = get_demo_account(db)
-
     # 查询最近 100 条订单，预加载股票信息
     orders = db.scalars(
         select(Order)
@@ -385,7 +790,10 @@ def list_orders(db: Session = Depends(get_db)) -> list[dict]:
 
 
 @router.get("/trades", response_model=list[TradeOut])
-def list_trades(db: Session = Depends(get_db)) -> list[dict]:
+def list_trades(
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> list[dict]:
     """
     获取成交记录列表（最近 100 条）。
 
@@ -394,9 +802,6 @@ def list_trades(db: Session = Depends(get_db)) -> list[dict]:
 
     前端用此数据渲染"成交记录" Tab。
     """
-    # 获取 demo 账户
-    account = get_demo_account(db)
-
     # 查询最近 100 条成交记录，预加载股票和订单信息
     trades = db.scalars(
         select(Trade)

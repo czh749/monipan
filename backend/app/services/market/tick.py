@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from ...market_index_pool import MARKET_INDEX_POOL
 from ...models import MarketIndex, Stock
+from .constants import logger
+from .history import upsert_latest_stock_bar
 from .types import MARKET_REFRESH_STATE
 
 
@@ -87,9 +89,18 @@ def tick_market(db: Session) -> int:
             if quote["name"]:
                 stock.name = quote["name"]
             stock.updated_at = quote["updated_at"]
+            upsert_latest_stock_bar(db, stock)
             updated_count += 1
 
         db.commit()
+        # 行情落库后撮合已触价的限价委托。延迟导入避免行情与交易服务循环依赖。
+        from ..trading import match_pending_orders
+
+        try:
+            match_pending_orders(db)
+        except Exception:
+            # 撮合故障不能把已经成功落库的公开行情标记为刷新失败。
+            logger.exception("限价委托撮合失败，行情快照已保留")
     except Exception as exc:
         db.rollback()
         MARKET_REFRESH_STATE.fail(exc)

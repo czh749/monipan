@@ -19,7 +19,7 @@ Docker 部署：
 生命周期流程：
     启动阶段（yield 之前）：
         1. 自动创建数据库表（如果不存在）
-        2. 初始化种子数据（demo 用户 + 200 只股票）
+        2. 初始化市场种子数据（200 只股票 + 5 个指数）
         3. 启动后台行情循环任务
 
     关闭阶段（yield 之后）：
@@ -37,10 +37,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
-from .database import Base, SessionLocal, engine
+from .database import Base, SessionLocal, engine, migrate_database
 from .seed import seed_database
 from .services.market import (
     MarketDataError,
+    backfill_stock_history_once,
     is_a_share_session,
     market_refresh_interval,
     tick_market,
@@ -50,6 +51,18 @@ from .services.market import (
 
 logger = logging.getLogger("uvicorn.error")
 INDEX_REFRESH_COOLDOWN_SECONDS = 60
+HISTORY_BACKFILL_INITIAL_DELAY_SECONDS = int(
+    os.getenv("MONIPAN_HISTORY_INITIAL_DELAY", "90")
+)
+HISTORY_BACKFILL_SUCCESS_INTERVAL_SECONDS = float(
+    os.getenv("MONIPAN_HISTORY_INTERVAL", "4")
+)
+HISTORY_BACKFILL_FAILURE_INTERVAL_SECONDS = float(
+    os.getenv("MONIPAN_HISTORY_FAILURE_INTERVAL", "20")
+)
+HISTORY_BACKFILL_IDLE_INTERVAL_SECONDS = float(
+    os.getenv("MONIPAN_HISTORY_IDLE_INTERVAL", "900")
+)
 
 
 def refresh_market_once() -> tuple[int, int]:
@@ -114,6 +127,37 @@ async def market_loop() -> None:
         await asyncio.sleep(sleep_seconds)
 
 
+def backfill_history_once(after_stock_id: int) -> tuple[int, str | None, bool]:
+    """Create an isolated session for one background history-cache step."""
+    with SessionLocal() as db:
+        return backfill_stock_history_once(db, after_stock_id)
+
+
+async def history_backfill_loop() -> None:
+    """Gradually warm 50-day K-line caches without creating a request burst."""
+    await asyncio.sleep(HISTORY_BACKFILL_INITIAL_DELAY_SECONDS)
+    cursor = 0
+    while True:
+        try:
+            cursor, symbol, complete = await asyncio.to_thread(
+                backfill_history_once,
+                cursor,
+            )
+        except Exception:
+            logger.exception("历史行情后台补全出现未预期错误")
+            await asyncio.sleep(HISTORY_BACKFILL_FAILURE_INTERVAL_SECONDS)
+            continue
+
+        if symbol is None:
+            cursor = 0
+            await asyncio.sleep(HISTORY_BACKFILL_IDLE_INTERVAL_SECONDS)
+        elif complete:
+            await asyncio.sleep(HISTORY_BACKFILL_SUCCESS_INTERVAL_SECONDS)
+        else:
+            # 当前股票失败后游标仍会前进；冷却后尝试下一只，避免队头阻塞。
+            await asyncio.sleep(HISTORY_BACKFILL_FAILURE_INTERVAL_SECONDS)
+
+
 # ---------------------------------------------------------------------------
 # 应用生命周期
 # ---------------------------------------------------------------------------
@@ -139,6 +183,7 @@ async def lifespan(_app: FastAPI):
     #    create_all 只会创建不存在的表，已存在的表不受影响
     #    bind=engine 指定使用哪个数据库引擎
     Base.metadata.create_all(bind=engine)
+    migrate_database()
 
     # 2. 初始化种子数据
     #    幂等操作：保留已有数据，并按股票代码补齐到 200 只
@@ -148,10 +193,10 @@ async def lifespan(_app: FastAPI):
     # 3. 启动后台行情循环
     #    asyncio.create_task 创建一个异步任务在后台运行
     #    任务会持续运行直到被取消
-    task = (
-        None
-        if os.getenv("MONIPAN_DISABLE_MARKET_LOOP") == "1"
-        else asyncio.create_task(market_loop())
+    background_enabled = os.getenv("MONIPAN_DISABLE_MARKET_LOOP") != "1"
+    market_task = asyncio.create_task(market_loop()) if background_enabled else None
+    history_task = (
+        asyncio.create_task(history_backfill_loop()) if background_enabled else None
     )
 
     # ------------ 应用正常运行期间 ------------
@@ -161,15 +206,17 @@ async def lifespan(_app: FastAPI):
     # ============ 关闭阶段 ============
 
     # 1. 取消后台行情任务
-    if task:
-        task.cancel()
+    for task in (market_task, history_task):
+        if task:
+            task.cancel()
 
     # 2. 等待任务优雅退出
     #    suppress(asyncio.CancelledError): 忽略取消异常（正常关闭行为）
     #    await task: 等待任务真正结束
-    if task:
-        with suppress(asyncio.CancelledError):
-            await task
+    for task in (market_task, history_task):
+        if task:
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 # ---------------------------------------------------------------------------

@@ -1,30 +1,12 @@
-"""
-交易引擎。
+"""Trading engine with A-share lot, T+1, price-limit and limit-order rules."""
 
-本模块实现了模拟盘系统的核心交易逻辑，包括：
-    - 账户查询
-    - 手续费计算（佣金 + 印花税）
-    - 市价委托下单（买入/卖出）
-    - 持仓管理（成本均价更新、持仓数量变更）
-    - 成交记录与资金流水记录
-
-A 股交易费用模型：
-    买入费用 = 佣金（成交金额 × 0.03%，最低 5 元）
-    卖出费用 = 佣金 + 印花税（成交金额 × 0.05%）
-
-交易规则：
-    - 仅支持市价单（MARKET），提交即成交
-    - 买卖数量必须是 100 股的整数倍（前端 + 后端双重校验）
-    - 买入时检查可用资金是否充足
-    - 卖出时检查持仓数量是否足够
-    - 持仓均价采用加权平均法计算
-"""
-
+from datetime import UTC, datetime, time
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import (
@@ -34,294 +16,524 @@ from ..models import (
     SimulationAccount,
     Stock,
     Trade,
-    User,
 )
+from .market.constants import CHINA_TZ
 
 
-# ===========================================================================
-# 常量定义
-# ===========================================================================
-
-# 价格精度：人民币最小单位 0.01 元
 CENT = Decimal("0.01")
-
-# 佣金费率：成交金额的 0.03%（万分之三）
-# 注意：真实 A 股佣金费率各券商不同，一般在万分之二点五到万分之三之间
 COMMISSION_RATE = Decimal("0.0003")
-
-# 最低佣金：每笔交易最低收取 5 元
-# 即如果按费率算出来的佣金不足 5 元，按 5 元收取
 MIN_COMMISSION = Decimal("5.00")
-
-# 卖出印花税率：成交金额的 0.05%（万分之五）
-# 注意：A 股印花税仅在卖出时单向收取，买入不收取
 SELL_STAMP_DUTY_RATE = Decimal("0.0005")
 
 
-# ===========================================================================
-# 工具函数
-# ===========================================================================
-
 def money(value: Decimal) -> Decimal:
-    """
-    将金额量化到分（0.01 元），四舍五入。
-
-    所有金额计算后都应通过此函数处理，确保精度一致。
-    例如：money(Decimal("123.456")) → Decimal("123.46")
-
-    Args:
-        value: 原始金额
-
-    Returns:
-        保留两位小数的金额
-    """
     return value.quantize(CENT, ROUND_HALF_UP)
 
 
-# ===========================================================================
-# 账户查询
-# ===========================================================================
-
-def get_demo_account(db: Session) -> SimulationAccount:
-    """
-    获取 demo 用户的模拟账户。
-
-    通过 username="demo" 查询用户并关联加载账户信息。
-    使用 joinedload 预加载 User 关系，避免后续访问 account.user 时
-    产生额外的 N+1 查询。
-
-    Args:
-        db: 数据库会话
-
-    Returns:
-        SimulationAccount: demo 用户的模拟账户
-
-    Raises:
-        HTTPException(404): 如果 demo 账户不存在
-    """
-    account = db.scalar(
-        select(SimulationAccount)
-        .join(User)                                    # 关联用户表
-        .where(User.username == "demo")                # 按用户名筛选
-        .options(joinedload(SimulationAccount.user))   # 预加载用户信息
-    )
-    if not account:
-        raise HTTPException(status_code=404, detail="模拟账户不存在")
-    return account
-
-
-# ===========================================================================
-# 手续费计算
-# ===========================================================================
-
 def calculate_fee(side: str, amount: Decimal) -> Decimal:
-    """
-    计算单笔交易的手续费总额。
-
-    A 股交易费用构成：
-        - 佣金：买入和卖出都收取
-          公式：max(5元, 成交金额 × 0.03%)
-        - 印花税：仅卖出时收取
-          公式：成交金额 × 0.05%
-
-    举例：
-        买入 10,000 元股票：佣金 = max(5, 10000×0.0003) = 5 元，总费用 = 5 元
-        卖出 10,000 元股票：佣金 = 5 元 + 印花税 = 10000×0.0005 = 5 元，总费用 = 10 元
-        买入 50,000 元股票：佣金 = 50000×0.0003 = 15 元，总费用 = 15 元
-
-    Args:
-        side: 买卖方向，"BUY" 或 "SELL"
-        amount: 成交金额（元）= 价格 × 数量
-
-    Returns:
-        总费用（元），保留两位小数
-    """
-    # 佣金：费率 × 金额，但不低于最低佣金 5 元
     commission = max(MIN_COMMISSION, money(amount * COMMISSION_RATE))
-
-    # 印花税：仅卖出时收取
     stamp_duty = money(amount * SELL_STAMP_DUTY_RATE) if side == "SELL" else Decimal("0")
-
-    # 总费用 = 佣金 + 印花税
     return money(commission + stamp_duty)
 
 
-# ===========================================================================
-# 市价下单
-# ===========================================================================
+def price_limit_rate(stock: Stock) -> Decimal:
+    """Return the daily price-limit rate for the stock's board."""
+    if "ST" in stock.name.upper():
+        return Decimal("0.05")
+    if stock.symbol.startswith(("688", "300", "301")):
+        return Decimal("0.20")
+    if stock.symbol.startswith(("4", "8")):
+        return Decimal("0.30")
+    return Decimal("0.10")
 
-def place_market_order(
+
+def price_limits(stock: Stock) -> tuple[Decimal, Decimal, Decimal]:
+    rate = price_limit_rate(stock)
+    upper = money(stock.prev_close * (Decimal("1") + rate))
+    lower = money(stock.prev_close * (Decimal("1") - rate))
+    return rate, upper, lower
+
+
+def _today_utc_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
+    observed = now or datetime.now(UTC)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    local_date = observed.astimezone(CHINA_TZ).date()
+    start_local = datetime.combine(local_date, time.min, tzinfo=CHINA_TZ)
+    end_local = datetime.combine(local_date, time.max, tzinfo=CHINA_TZ)
+    return (
+        start_local.astimezone(UTC).replace(tzinfo=None),
+        end_local.astimezone(UTC).replace(tzinfo=None),
+    )
+
+
+def position_sellable_values(
     db: Session,
+    account_id: int,
+    position: Position | None,
+    *,
+    exclude_order_id: int | None = None,
+    now: datetime | None = None,
+) -> tuple[int, int, int]:
+    """Return T+1 sellable, frozen pending-sell and currently orderable shares."""
+    if position is None or position.quantity <= 0:
+        return 0, 0, 0
+    start, end = _today_utc_bounds(now)
+    bought_today = db.scalar(
+        select(func.coalesce(func.sum(Trade.quantity), 0)).where(
+            Trade.account_id == account_id,
+            Trade.stock_id == position.stock_id,
+            Trade.side == "BUY",
+            Trade.created_at >= start,
+            Trade.created_at <= end,
+        )
+    ) or 0
+    pending_query = select(
+        func.coalesce(func.sum(Order.quantity - Order.filled_quantity), 0)
+    ).where(
+        Order.account_id == account_id,
+        Order.stock_id == position.stock_id,
+        Order.side == "SELL",
+        Order.status == "PENDING",
+    )
+    if exclude_order_id is not None:
+        pending_query = pending_query.where(Order.id != exclude_order_id)
+    frozen = int(db.scalar(pending_query) or 0)
+    sellable = max(0, position.quantity - int(bought_today))
+    return sellable, frozen, max(0, sellable - frozen)
+
+
+def _pending_buy_reserve(db: Session, account_id: int) -> Decimal:
+    orders = db.scalars(
+        select(Order).where(
+            Order.account_id == account_id,
+            Order.side == "BUY",
+            Order.status == "PENDING",
+        )
+    ).all()
+    return sum(
+        (
+            money((order.limit_price or order.price) * (order.quantity - order.filled_quantity))
+            + calculate_fee("BUY", money((order.limit_price or order.price) * (order.quantity - order.filled_quantity)))
+            for order in orders
+        ),
+        Decimal("0"),
+    )
+
+
+def _max_buy_quantity(buying_power: Decimal, price: Decimal) -> int:
+    if buying_power <= 0 or price <= 0:
+        return 0
+    quantity = int(buying_power / price) // 100 * 100
+    while quantity > 0:
+        amount = money(price * quantity)
+        if amount + calculate_fee("BUY", amount) <= buying_power:
+            return quantity
+        quantity -= 100
+    return 0
+
+
+def _portfolio_market_value(db: Session, account_id: int) -> Decimal:
+    positions = db.scalars(
+        select(Position)
+        .where(Position.account_id == account_id, Position.quantity > 0)
+        .options(joinedload(Position.stock))
+    ).all()
+    return sum((item.stock.price * item.quantity for item in positions), Decimal("0"))
+
+
+def build_order_preview(
+    db: Session,
+    account: SimulationAccount,
     symbol: str,
     side: str,
     quantity: int,
-) -> Order:
-    
-    # ------------------------------------------------------------------
-    # 第一步：获取账户和股票信息
-    # ------------------------------------------------------------------
-    account = get_demo_account(db)
-
+    order_type: str = "MARKET",
+    limit_price: Decimal | None = None,
+) -> dict:
     stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
     if not stock:
         raise HTTPException(status_code=404, detail="股票不存在")
     if stock.price <= 0 or stock.prev_close <= 0:
         raise HTTPException(status_code=503, detail="该股票尚未取得真实行情，暂不可下单")
 
-    # ------------------------------------------------------------------
-    # 第二步：计算成交金额和费用
-    # ------------------------------------------------------------------
-    # 以当前市价作为成交价格
-    price = stock.price
-    # 成交金额 = 价格 × 数量
-    amount = money(price * quantity)
-    # 手续费（佣金 + 可能的印花税）
+    position = db.scalar(
+        select(Position).where(
+            Position.account_id == account.id,
+            Position.stock_id == stock.id,
+        )
+    )
+    sellable, frozen, orderable = position_sellable_values(db, account.id, position)
+    rate, upper, lower = price_limits(stock)
+    estimate_price = limit_price if order_type == "LIMIT" and limit_price else stock.price
+    amount = money(estimate_price * quantity)
     fee = calculate_fee(side, amount)
-
-    # ------------------------------------------------------------------
-    # 第三步：创建订单记录
-    # ------------------------------------------------------------------
-    # 订单编号格式：O + 16 位大写十六进制（UUID4 前 16 位）
-    # 示例：OA1B2C3D4E5F6G7H8
-    order = Order(
-        order_no=f"O{uuid4().hex[:16].upper()}",
-        account_id=account.id,
-        stock_id=stock.id,
-        side=side,
-        order_type="MARKET",       # 市价单
-        quantity=quantity,
-        filled_quantity=quantity,   # 市价单：提交即全部成交
-        price=price,
-        fee=fee,
-        status="FILLED",            # 直接标记为已成交
+    estimated_total = money(amount + fee if side == "BUY" else amount - fee)
+    reserve = _pending_buy_reserve(db, account.id)
+    buying_power = max(Decimal("0"), account.available_cash - reserve)
+    max_quantity = (
+        _max_buy_quantity(buying_power, estimate_price)
+        if side == "BUY"
+        else orderable
     )
 
-    # ------------------------------------------------------------------
-    # 第四步：执行交易（在 try 块中确保异常时回滚）
-    # ------------------------------------------------------------------
-    try:
-        # 将订单写入数据库（flush 获取自增 id，但不 commit）
-        db.add(order)
-        db.flush()
+    blocking_reason: str | None = None
+    if order_type == "LIMIT" and limit_price is not None and not lower <= limit_price <= upper:
+        blocking_reason = f"委托价须在当日涨跌停区间 ¥{lower}—¥{upper} 内"
+    elif side == "BUY" and estimated_total > buying_power:
+        blocking_reason = "可用资金不足（已扣除待成交买单占用）"
+    elif side == "SELL" and quantity > orderable:
+        blocking_reason = "T+1 可卖数量不足或已有待成交卖单占用"
+    elif order_type == "MARKET" and side == "BUY" and stock.price >= upper:
+        blocking_reason = "当前已涨停，市价买入无法保证成交"
+    elif order_type == "MARKET" and side == "SELL" and stock.price <= lower:
+        blocking_reason = "当前已跌停，市价卖出无法保证成交"
 
-        # 查询该股票是否存在已有持仓
-        # 同一账户对同一股票最多一条持仓记录（由唯一约束保证）
-        position = db.scalar(
-            select(Position).where(
-                Position.account_id == account.id,
-                Position.stock_id == stock.id,
-            )
+    current_market_value = _portfolio_market_value(db, account.id)
+    position_value_delta = stock.price * quantity * (Decimal("1") if side == "BUY" else Decimal("-1"))
+    post_market_value = max(Decimal("0"), current_market_value + position_value_delta)
+    post_cash = (
+        account.available_cash - estimated_total
+        if side == "BUY"
+        else account.available_cash + estimated_total
+    )
+    post_assets = post_cash + post_market_value
+    post_ratio = (
+        post_market_value / post_assets * Decimal("100")
+        if post_assets > 0
+        else Decimal("0")
+    )
+    warnings: list[str] = []
+    quote_age = (datetime.now(UTC).replace(tzinfo=None) - stock.updated_at).total_seconds()
+    if quote_age > 20 * 60:
+        warnings.append("当前行情超过 20 分钟未更新，请确认数据时效")
+    if side == "BUY" and post_ratio >= Decimal("80"):
+        warnings.append("成交后总仓位将超过 80%，请关注现金缓冲")
+    current_position_value = (position.quantity if position else 0) * stock.price
+    post_symbol_value = current_position_value + (
+        stock.price * quantity * (Decimal("1") if side == "BUY" else Decimal("-1"))
+    )
+    if side == "BUY" and post_assets > 0 and post_symbol_value / post_assets >= Decimal("0.35"):
+        warnings.append("成交后单股仓位将超过账户资产的 35%")
+    if order_type == "LIMIT":
+        warnings.append("未触及委托价时订单将进入待成交，可在委托记录中撤单")
+
+    return {
+        "symbol": stock.symbol,
+        "side": side,
+        "order_type": order_type,
+        "quantity": quantity,
+        "reference_price": stock.price,
+        "limit_price": limit_price,
+        "estimated_amount": amount,
+        "estimated_fee": fee,
+        "estimated_total": estimated_total,
+        "max_quantity": max_quantity,
+        "position_quantity": position.quantity if position else 0,
+        "sellable_quantity": sellable,
+        "frozen_sell_quantity": frozen,
+        "post_available_cash": money(post_cash),
+        "post_position_ratio": post_ratio.quantize(Decimal("0.01")),
+        "price_limit_rate": rate * Decimal("100"),
+        "upper_limit": upper,
+        "lower_limit": lower,
+        "quote_updated_at": stock.updated_at,
+        "allowed": blocking_reason is None,
+        "blocking_reason": blocking_reason,
+        "warnings": warnings,
+    }
+
+
+def _fill_order(
+    db: Session,
+    order: Order,
+    stock: Stock,
+    account: SimulationAccount,
+    execution_price: Decimal,
+) -> None:
+    amount = money(execution_price * order.quantity)
+    fee = calculate_fee(order.side, amount)
+    position = db.scalar(
+        select(Position).where(
+            Position.account_id == account.id,
+            Position.stock_id == stock.id,
         )
+    )
 
-        # ---- 买入分支 ----
-        if side == "BUY":
-            # 计算买入总成本 = 成交金额 + 手续费
-            total_cost = amount + fee
+    if order.side == "BUY":
+        total_cost = amount + fee
+        if account.available_cash < total_cost:
+            raise HTTPException(status_code=400, detail="订单触价，但当前可用资金不足")
+        old_quantity = position.quantity if position else 0
+        old_cost = position.average_cost * old_quantity if position else Decimal("0")
+        if position is None:
+            position = Position(account_id=account.id, stock_id=stock.id)
+            db.add(position)
+        position.quantity = old_quantity + order.quantity
+        position.average_cost = (old_cost + total_cost) / position.quantity
+        account.available_cash = money(account.available_cash - total_cost)
+        cash_change = -total_cost
+    else:
+        _sellable, _frozen, orderable = position_sellable_values(
+            db,
+            account.id,
+            position,
+            exclude_order_id=order.id,
+        )
+        if position is None or orderable < order.quantity:
+            raise HTTPException(status_code=400, detail="订单触价，但 T+1 可卖数量不足")
+        proceeds = amount - fee
+        position.quantity -= order.quantity
+        if position.quantity == 0:
+            position.average_cost = Decimal("0")
+        account.available_cash = money(account.available_cash + proceeds)
+        cash_change = proceeds
 
-            # 检查可用资金是否足够
-            if account.available_cash < total_cost:
-                raise HTTPException(status_code=400, detail="可用资金不足")
-
-            # 记录买入前的持仓数量和成本（用于计算新的加权均价）
-            old_quantity = position.quantity if position else 0
-            old_cost = (
-                position.average_cost * old_quantity if position else Decimal("0")
-            )
-
-            # 如果没有持仓记录，创建一条新的
-            if not position:
-                position = Position(account_id=account.id, stock_id=stock.id)
-                db.add(position)
-
-            # 更新持仓数量：旧数量 + 本次买入数量
-            position.quantity = old_quantity + quantity
-
-            # 更新持仓均价（加权平均法）
-            # 新均价 = (旧总成本 + 本次买入总成本) / 新总数量
-            # 注意：分母是更新后的 position.quantity
-            position.average_cost = (old_cost + total_cost) / position.quantity
-
-            # 扣减可用资金
-            account.available_cash = money(account.available_cash - total_cost)
-
-            # 资金变动金额（负数表示支出）
-            cash_change = -total_cost
-
-        # ---- 卖出分支 ----
-        else:
-            # 检查持仓是否存在且数量足够
-            if not position or position.quantity < quantity:
-                raise HTTPException(status_code=400, detail="可卖持仓不足")
-
-            # 卖出净收入 = 成交金额 - 手续费（印花税 + 佣金）
-            proceeds = amount - fee
-
-            # 减少持仓数量
-            position.quantity -= quantity
-
-            # 如果卖完后持仓数量为 0，清空均价
-            # （避免后续计算浮动盈亏时除零错误）
-            if position.quantity == 0:
-                position.average_cost = Decimal("0")
-
-            # 增加可用资金
-            account.available_cash = money(account.available_cash + proceeds)
-
-            # 资金变动金额（正数表示收入）
-            cash_change = proceeds
-
-        # ------------------------------------------------------------------
-        # 第五步：创建成交记录
-        # ------------------------------------------------------------------
-        # 成交编号格式：T + 16 位大写十六进制
-        trade = Trade(
+    position.updated_at = datetime.now(UTC).replace(tzinfo=None)
+    order.price = execution_price
+    order.fee = fee
+    order.filled_quantity = order.quantity
+    order.status = "FILLED"
+    db.add(
+        Trade(
             trade_no=f"T{uuid4().hex[:16].upper()}",
             order_id=order.id,
             account_id=account.id,
             stock_id=stock.id,
-            side=side,
-            quantity=quantity,
-            price=price,
+            side=order.side,
+            quantity=order.quantity,
+            price=execution_price,
             amount=amount,
             fee=fee,
         )
-        db.add(trade)
+    )
+    db.add(
+        AccountTransaction(
+            account_id=account.id,
+            order_id=order.id,
+            transaction_type=order.side,
+            amount=cash_change,
+            balance_after=account.available_cash,
+        )
+    )
 
-        # ------------------------------------------------------------------
-        # 第六步：创建账户资金流水
-        # ------------------------------------------------------------------
-        db.add(
-            AccountTransaction(
-                account_id=account.id,
-                order_id=order.id,
-                transaction_type=side,       # "BUY" 或 "SELL"
-                amount=cash_change,          # 买入为负数，卖出为正数
-                balance_after=account.available_cash,  # 交易后余额
-            )
+
+def _idempotent_order(
+    db: Session,
+    *,
+    account_id: int,
+    idempotency_key: str,
+) -> Order | None:
+    return db.scalar(
+        select(Order)
+        .where(
+            Order.account_id == account_id,
+            Order.idempotency_key == idempotency_key,
+        )
+        .options(joinedload(Order.stock))
+    )
+
+
+def _same_order_request(
+    order: Order,
+    *,
+    symbol: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    limit_price: Decimal | None,
+) -> bool:
+    expected_limit_price = limit_price if order_type == "LIMIT" else None
+    return bool(
+        order.stock.symbol == symbol
+        and order.side == side
+        and order.quantity == quantity
+        and order.order_type == order_type
+        and order.limit_price == expected_limit_price
+    )
+
+
+def _return_or_reject_idempotent_order(
+    order: Order,
+    *,
+    symbol: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    limit_price: Decimal | None,
+) -> Order:
+    if not _same_order_request(
+        order,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        order_type=order_type,
+        limit_price=limit_price,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该防重复操作键已经用于另一笔委托，请重新发起下单",
+        )
+    return order
+
+
+def place_order(
+    db: Session,
+    account: SimulationAccount,
+    symbol: str,
+    side: str,
+    quantity: int,
+    order_type: str = "MARKET",
+    limit_price: Decimal | None = None,
+    idempotency_key: str | None = None,
+) -> Order:
+    operation_key = idempotency_key or f"server-{uuid4().hex}"
+    existing = _idempotent_order(
+        db,
+        account_id=account.id,
+        idempotency_key=operation_key,
+    )
+    if existing is not None:
+        return _return_or_reject_idempotent_order(
+            existing,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            order_type=order_type,
+            limit_price=limit_price,
         )
 
-        # ------------------------------------------------------------------
-        # 第七步：提交事务
-        # ------------------------------------------------------------------
-        # 所有数据变更在同一事务中提交，保证原子性
+    preview = build_order_preview(
+        db, account, symbol, side, quantity, order_type, limit_price
+    )
+    if not preview["allowed"]:
+        raise HTTPException(status_code=400, detail=preview["blocking_reason"])
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
+    assert stock is not None
+    requested_price = limit_price if order_type == "LIMIT" else stock.price
+    order = Order(
+        order_no=f"O{uuid4().hex[:16].upper()}",
+        account_id=account.id,
+        idempotency_key=operation_key,
+        stock_id=stock.id,
+        side=side,
+        order_type=order_type,
+        quantity=quantity,
+        filled_quantity=0,
+        price=requested_price,
+        limit_price=limit_price,
+        fee=Decimal("0"),
+        status="PENDING",
+    )
+    try:
+        db.add(order)
+        db.flush()
+        marketable = order_type == "MARKET" or (
+            side == "BUY" and limit_price is not None and limit_price >= stock.price
+        ) or (
+            side == "SELL" and limit_price is not None and limit_price <= stock.price
+        )
+        if marketable:
+            _fill_order(db, order, stock, account, stock.price)
         db.commit()
-
-        # 刷新订单对象，使其包含数据库生成的值（如 created_at）
         db.refresh(order)
-
-        # 手动关联股票对象，方便 API 层通过 order.stock.name 获取名称
         order.stock = stock
-
         return order
-
+    except IntegrityError:
+        db.rollback()
+        # Two copies of the same HTTP request can pass the initial lookup
+        # together. The database unique constraint elects one winner; once it
+        # commits, return that order instead of creating another one.
+        existing = _idempotent_order(
+            db,
+            account_id=account.id,
+            idempotency_key=operation_key,
+        )
+        if existing is not None:
+            return _return_or_reject_idempotent_order(
+                existing,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                order_type=order_type,
+                limit_price=limit_price,
+            )
+        raise
     except HTTPException:
-        # FastAPI HTTP 异常：回滚事务并重新抛出
-        # 这类异常是业务校验失败（资金不足、持仓不足等），不需要记录日志
+        db.rollback()
+        raise
+    except Exception:
         db.rollback()
         raise
 
-    except Exception:
-        # 其他未知异常：回滚事务并重新抛出
-        # 这类异常需要上层（FastAPI 异常处理器）记录日志
-        db.rollback()
-        raise
+
+def place_market_order(
+    db: Session,
+    account: SimulationAccount,
+    symbol: str,
+    side: str,
+    quantity: int,
+) -> Order:
+    """Backward-compatible wrapper used by older callers."""
+    return place_order(db, account, symbol, side, quantity)
+
+
+def cancel_order(
+    db: Session,
+    account: SimulationAccount,
+    order_no: str,
+) -> Order:
+    order = db.scalar(
+        select(Order)
+        .where(Order.account_id == account.id, Order.order_no == order_no)
+        .options(joinedload(Order.stock))
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="委托不存在")
+    if order.status != "PENDING":
+        raise HTTPException(status_code=400, detail="只有待成交委托可以撤单")
+    order.status = "CANCELED"
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def match_pending_orders(db: Session) -> int:
+    """Fill limit orders crossed by the latest quote; reject orders invalid at fill time."""
+    orders = db.scalars(
+        select(Order)
+        .where(Order.status == "PENDING", Order.order_type == "LIMIT")
+        .options(joinedload(Order.stock))
+        .order_by(Order.created_at.asc())
+    ).all()
+    matched = 0
+    for order in orders:
+        stock = order.stock
+        limit_price = order.limit_price or order.price
+        crossed = (
+            order.side == "BUY" and stock.price <= limit_price
+        ) or (
+            order.side == "SELL" and stock.price >= limit_price
+        )
+        _rate, upper, lower = price_limits(stock)
+        locked = (
+            order.side == "BUY" and stock.price >= upper
+        ) or (
+            order.side == "SELL" and stock.price <= lower
+        )
+        if not crossed or locked:
+            continue
+        account = db.get(SimulationAccount, order.account_id)
+        assert account is not None
+        try:
+            _fill_order(db, order, stock, account, stock.price)
+            db.commit()
+            matched += 1
+        except HTTPException as exc:
+            db.rollback()
+            refreshed = db.scalar(select(Order).where(Order.id == order.id))
+            if refreshed is not None:
+                refreshed.status = "REJECTED"
+                refreshed.reject_reason = str(exc.detail)
+                db.commit()
+    return matched

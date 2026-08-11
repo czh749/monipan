@@ -1,34 +1,12 @@
-# ===========================================================================
-# MoniPan 后端依赖
-# ===========================================================================
-# 安装方式: pip install -r requirements.txt
-# 建议使用虚拟环境: python -m venv .venv && source .venv/bin/activate
-
-# ---- Web 框架 ----
-# FastAPI: 现代高性能 Python Web 框架，基于 Starlette + Pydantic
-# 自动生成 OpenAPI 文档（Swagger UI + ReDoc）
 fastapi>=0.115
-
-# ---- ASGI 服务器 ----
-# Uvicorn: 轻量级 ASGI 服务器，用于运行 FastAPI 应用
-# [standard] 额外安装 uvloop 和 httptools，提升性能
 uvicorn[standard]>=0.30
-
-# ---- ORM ----
-# SQLAlchemy 2.0+: Python 最流行的 ORM，使用声明式映射风格
-# 2.0 版本引入了 Mapped + mapped_column 的类型安全 API
 sqlalchemy>=2.0
-
-# ---- 数据校验 ----
-# Pydantic 2.0+: FastAPI 的核心依赖，提供请求/响应数据校验和序列化
+PyMySQL[rsa]>=1.1,<2
+argon2-cffi>=23.1,<26
 pydantic>=2.9
-
-# ---- 测试 ----
-# pytest: Python 测试框架
-# httpx: 异步 HTTP 客户端（TestClient 底层依赖）
 pytest>=8.0
 httpx>=0.27
-
-# ---- A 股真实行情 ----
-# Requests: 分批获取东方财富指定股票的实时行情快照
 requests>=2.32
+pypdf>=6.0,<7
+langchain>=1.3,<2
+langchain-openai>=1.3,<2
