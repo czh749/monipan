@@ -298,6 +298,7 @@ export interface CurrentUser {
 export interface AuthRequest {
   username: string
   password: string
+  invite_code?: string
 }
 
 export interface StockAnalysisRequest {

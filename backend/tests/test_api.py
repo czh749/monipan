@@ -50,6 +50,7 @@ os.environ["MONIPAN_DATABASE_URL"] = (
 )
 
 from app.database import Base, SessionLocal, engine
+from app.auth import hash_invite_code
 from app.agent import (
     AgentEvidenceRecord,
     AgentPersistenceError,
@@ -67,6 +68,7 @@ from app.agent import orchestrator as agent_orchestrator
 from app.agent.evidence import EvidenceSearchResult
 from app import main as app_main
 from app.main import app
+from app.invites import create_invitations, disable_invitation
 from app.models import (
     AccountTransaction,
     AgentEvidence,
@@ -76,6 +78,7 @@ from app.models import (
     AuthSession,
     CompanyAnnouncement,
     FinancialReport,
+    InvitationCode,
     MarketIndex,
     Order,
     OfficialDocumentChunk,
@@ -137,6 +140,7 @@ def reset_user_accounts() -> None:
         db.execute(delete(Position))
         db.execute(delete(WatchlistItem))
         db.execute(delete(AuthSession))
+        db.execute(delete(InvitationCode))
         db.execute(delete(OfficialDocumentChunk))
         db.execute(delete(OfficialDocumentContent))
         db.execute(delete(RegulatoryLetterReply))
@@ -158,13 +162,37 @@ def register_test_user(
     username: str | None = None,
 ) -> str:
     selected_username = username or f"trader_{uuid4().hex[:8]}"
+    invite_code = create_test_invite()
     response = client.post(
         "/api/auth/register",
-        json={"username": selected_username, "password": "StrongPass2026"},
+        json={
+            "username": selected_username,
+            "password": "StrongPass2026",
+            "invite_code": invite_code,
+        },
     )
     assert response.status_code == 201, response.text
     assert response.json()["username"] == selected_username
     return selected_username
+
+
+def create_test_invite(
+    *,
+    expires_at: datetime | None = None,
+    disabled_at: datetime | None = None,
+) -> str:
+    raw_code = f"invite-{uuid4().hex}"
+    with SessionLocal() as db:
+        db.add(
+            InvitationCode(
+                code_hash=hash_invite_code(raw_code),
+                expires_at=expires_at,
+                disabled_at=disabled_at,
+                label="pytest",
+            )
+        )
+        db.commit()
+    return raw_code
 
 
 def order_headers(idempotency_key: str | None = None) -> dict[str, str]:
@@ -313,11 +341,13 @@ def test_manual_market_tick_is_not_exposed() -> None:
 def test_registration_is_rate_limited_by_ip() -> None:
     with TestClient(app) as client:
         for index in range(3):
+            invite_code = create_test_invite()
             response = client.post(
                 "/api/auth/register",
                 json={
                     "username": f"limited_registration_{index}",
                     "password": "StrongPass2026",
+                    "invite_code": invite_code,
                 },
             )
             assert response.status_code == 201, response.text
@@ -327,11 +357,111 @@ def test_registration_is_rate_limited_by_ip() -> None:
             json={
                 "username": "limited_registration_blocked",
                 "password": "StrongPass2026",
+                "invite_code": create_test_invite(),
             },
         )
         assert blocked.status_code == 429
         assert blocked.json()["detail"]["code"] == "RATE_LIMITED"
         assert int(blocked.headers["retry-after"]) > 0
+
+
+def test_registration_requires_a_valid_one_time_invitation() -> None:
+    with TestClient(app) as client:
+        invalid = client.post(
+            "/api/auth/register",
+            json={
+                "username": "invalid_invite_user",
+                "password": "StrongPass2026",
+                "invite_code": "invalid-invitation-code",
+            },
+        )
+        assert invalid.status_code == 409
+
+        invite_code = create_test_invite()
+        first = client.post(
+            "/api/auth/register",
+            json={
+                "username": "invited_user",
+                "password": "StrongPass2026",
+                "invite_code": invite_code,
+            },
+        )
+        assert first.status_code == 201, first.text
+
+        reused = client.post(
+            "/api/auth/register",
+            json={
+                "username": "invite_reuse_user",
+                "password": "StrongPass2026",
+                "invite_code": invite_code,
+            },
+        )
+        assert reused.status_code == 409
+        assert "邀请码无效" in reused.json()["detail"]
+
+        with SessionLocal() as db:
+            invitation = db.scalar(
+                select(InvitationCode).where(
+                    InvitationCode.code_hash == hash_invite_code(invite_code)
+                )
+            )
+            assert invitation is not None
+            assert invitation.used_at is not None
+            assert invitation.used_by_user_id is not None
+            assert db.scalar(
+                select(User.id).where(User.username == "invite_reuse_user")
+            ) is None
+
+
+def test_registration_rejects_expired_and_disabled_invitations() -> None:
+    expired = create_test_invite(
+        expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=1)
+    )
+    disabled = create_test_invite(
+        disabled_at=datetime.now(UTC).replace(tzinfo=None)
+    )
+    with TestClient(app) as client:
+        for username, invite_code in (
+            ("expired_invite_user", expired),
+            ("disabled_invite_user", disabled),
+        ):
+            response = client.post(
+                "/api/auth/register",
+                json={
+                    "username": username,
+                    "password": "StrongPass2026",
+                    "invite_code": invite_code,
+                },
+            )
+            assert response.status_code == 409
+
+
+def test_invitation_generator_stores_only_hash_and_can_disable() -> None:
+    raw_code = create_invitations(
+        count=1,
+        expires_days=30,
+        label="pytest-generated",
+    )[0]
+    with SessionLocal() as db:
+        invitation = db.scalar(
+            select(InvitationCode).where(
+                InvitationCode.code_hash == hash_invite_code(raw_code)
+            )
+        )
+        assert invitation is not None
+        assert invitation.code_hash != raw_code
+        assert invitation.label == "pytest-generated"
+        assert invitation.expires_at is not None
+
+    assert disable_invitation(raw_code) is True
+    with SessionLocal() as db:
+        invitation = db.scalar(
+            select(InvitationCode).where(
+                InvitationCode.code_hash == hash_invite_code(raw_code)
+            )
+        )
+        assert invitation is not None
+        assert invitation.disabled_at is not None
 
 
 def test_failed_login_limit_clears_after_correct_password() -> None:

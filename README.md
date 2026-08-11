@@ -16,6 +16,7 @@
 - 公司财务摘要、最近报告期趋势、业绩预告与正式财报时间轴
 - 账户资产、持仓、委托和成交记录
 - 网站用户名/密码注册登录，Argon2id 密码哈希与 HttpOnly 服务端会话
+- 一人一码的一次性注册邀请，可设置有效期并在服务器端单独禁用
 - 每个用户独立的资金、持仓、自选、委托和成交数据
 - 前端展示行情来源、最近更新时间、覆盖率与新鲜度状态
 - 大盘脉搏模块展示上证、深证、创业板、沪深300和科创50
@@ -177,6 +178,18 @@ Docker 的公网 Nginx 会隐藏 `/docs`、`/redoc`、`/openapi.json`，并对�
 - `POST /api/auth/logout`：注销当前会话
 
 账户、持仓、自选、委托和成交接口都要求登录；股票行情、K 线、大盘指数与行情状态保持公开读取。
+
+注册必须使用服务器生成的一次性邀请码。邀请码原文只在生成时显示一次，数据库只保存哈希；成功注册后立即失效。生成 5 个有效期为 30 天的邀请码：
+
+```powershell
+docker compose exec backend python -m app.invites create --count 5 --expires-days 30 --label friends
+```
+
+单独禁用尚未使用的邀请码：
+
+```powershell
+docker compose exec backend python -m app.invites disable <邀请码>
+```
 
 创建订单时必须携带 16～64 字符的 `Idempotency-Key` 请求头，推荐使用 UUID。客户端在无法确认第一次请求是否成功时，应使用相同请求参数和相同键重试；同一键若改用于其他股票、方向、数量或委托价格，服务端返回 `409`。
 

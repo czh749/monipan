@@ -8,12 +8,12 @@ from secrets import token_urlsafe
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHash, VerifyMismatchError
 from fastapi import Depends, HTTPException, Request, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from .database import get_db
-from .models import AuthSession, SimulationAccount, User
+from .models import AuthSession, InvitationCode, SimulationAccount, User
 from .schemas import RegisterIn
 
 
@@ -41,6 +41,14 @@ def hash_token(raw_token: str) -> str:
     return sha256(raw_token.encode("utf-8")).hexdigest()
 
 
+def hash_invite_code(raw_code: str) -> str:
+    return sha256(f"monipan-invite:{raw_code}".encode("utf-8")).hexdigest()
+
+
+def invalid_invite() -> HTTPException:
+    return HTTPException(status_code=409, detail="邀请码无效、已使用或已过期")
+
+
 def user_values(user: User) -> dict:
     return {
         "username": user.username,
@@ -50,6 +58,23 @@ def user_values(user: User) -> dict:
 
 
 def register_user(db: Session, payload: RegisterIn) -> User:
+    now = utcnow()
+    invitation = db.scalar(
+        select(InvitationCode).where(
+            InvitationCode.code_hash == hash_invite_code(payload.invite_code)
+        )
+    )
+    if (
+        invitation is None
+        or invitation.used_at is not None
+        or invitation.disabled_at is not None
+        or (
+            invitation.expires_at is not None
+            and invitation.expires_at <= now
+        )
+    ):
+        raise invalid_invite()
+
     if payload.username == "demo":
         raise HTTPException(status_code=409, detail="该用户名不可注册")
     if db.scalar(select(User.id).where(User.username == payload.username)):
@@ -70,12 +95,31 @@ def register_user(db: Session, payload: RegisterIn) -> User:
                 available_cash=1_000_000,
             )
         )
+        db.flush()
+        claim = db.execute(
+            update(InvitationCode)
+            .where(
+                InvitationCode.id == invitation.id,
+                InvitationCode.used_at.is_(None),
+                InvitationCode.disabled_at.is_(None),
+                or_(
+                    InvitationCode.expires_at.is_(None),
+                    InvitationCode.expires_at > now,
+                ),
+            )
+            .values(used_by_user_id=user.id, used_at=now)
+        )
+        if claim.rowcount != 1:
+            raise invalid_invite()
         db.commit()
         return db.scalar(
             select(User)
             .where(User.id == user.id)
             .options(joinedload(User.account))
         )
+    except HTTPException:
+        db.rollback()
+        raise
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="用户名已被使用") from exc

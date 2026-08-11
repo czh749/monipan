@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class RegisterIn(BaseModel):
     username: str = Field(min_length=3, max_length=30)
     password: str = Field(min_length=10, max_length=128)
+    invite_code: str = Field(min_length=16, max_length=128)
 
     @field_validator("username")
     @classmethod
@@ -27,6 +28,11 @@ class RegisterIn(BaseModel):
         ):
             raise ValueError("密码必须同时包含字母和数字")
         return value
+
+    @field_validator("invite_code")
+    @classmethod
+    def normalize_invite_code(cls, value: str) -> str:
+        return value.strip()
 
 
 class LoginIn(BaseModel):

@@ -15,6 +15,7 @@ const mode = ref<'login' | 'register'>('login')
 const username = ref('')
 const password = ref('')
 const confirmation = ref('')
+const inviteCode = ref('')
 const localError = ref('')
 const title = computed(() => mode.value === 'login' ? '进入交易席位' : '创建模拟账户')
 const actionLabel = computed(() => mode.value === 'login' ? '登录交易席位' : '创建并进入')
@@ -23,6 +24,7 @@ watch(mode, () => {
   localError.value = ''
   password.value = ''
   confirmation.value = ''
+  inviteCode.value = ''
 })
 
 function submit() {
@@ -34,6 +36,7 @@ function submit() {
   emit('authenticate', mode.value, {
     username: username.value.trim(),
     password: password.value,
+    ...(mode.value === 'register' ? { invite_code: inviteCode.value.trim() } : {}),
   })
 }
 </script>
@@ -79,6 +82,20 @@ function submit() {
       </div>
 
       <form class="auth-form" @submit.prevent="submit">
+        <label v-if="mode === 'register'">
+          <span>一次性邀请码</span>
+          <input
+            v-model="inviteCode"
+            name="invite-code"
+            autocomplete="off"
+            minlength="16"
+            maxlength="128"
+            placeholder="输入朋友发给你的邀请码"
+            spellcheck="false"
+            required
+            :disabled="loading"
+          >
+        </label>
         <label>
           <span>用户名</span>
           <input
@@ -131,7 +148,7 @@ function submit() {
       </form>
 
       <p class="auth-security-note">
-        密码经 Argon2id 哈希保存；登录凭证不会暴露给页面脚本。
+        {{ mode === 'register' ? '邀请码仅可使用一次；密码经 Argon2id 哈希保存。' : '密码经 Argon2id 哈希保存；登录凭证不会暴露给页面脚本。' }}
       </p>
     </div>
   </section>

@@ -39,6 +39,26 @@ class User(Base):
     sessions: Mapped[list["AuthSession"]] = relationship(back_populates="user")
 
 
+class InvitationCode(Base):
+    """One-time registration invitation; the raw code is never persisted."""
+
+    __tablename__ = "invitation_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    used_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    used_by: Mapped[User | None] = relationship()
+
+
 class AuthSession(Base):
     """Server-side website session; the raw token is only stored in a cookie."""
 
