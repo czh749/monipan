@@ -1,18 +1,23 @@
 """Daily K-line retrieval and local cache management."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 import threading
 import time
 from typing import Any
 
 import requests
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ...models import Stock, StockBar
-from .constants import CHINA_TZ, EASTMONEY_REQUEST_HEADERS, logger
-from .eastmoney import _eastmoney_secid, _nonnegative_decimal, _positive_decimal
+from .constants import EASTMONEY_REQUEST_HEADERS, logger
+from .eastmoney import (
+    _decimal_value,
+    _eastmoney_secid,
+    _nonnegative_decimal,
+    _positive_decimal,
+)
 from .types import MarketDataError
 
 
@@ -40,7 +45,7 @@ def fetch_eastmoney_history(
         "lmt": str(limit),
         "end": "20500101",
         "fields1": "f1,f2,f3,f4,f5,f6",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
     }
     global _history_next_request_at
     with _HISTORY_REQUEST_LOCK:
@@ -79,6 +84,10 @@ def fetch_eastmoney_history(
         high_price = _positive_decimal(fields[3])
         low_price = _positive_decimal(fields[4])
         turnover = _nonnegative_decimal(fields[6]) or Decimal("0")
+        provider_change_percent = (
+            _decimal_value(fields[8]) if len(fields) > 8 else None
+        )
+        provider_change = _decimal_value(fields[9]) if len(fields) > 9 else None
         try:
             trade_date = datetime.strptime(fields[0], "%Y-%m-%d").date()
             volume = max(0, int(float(fields[5]) * 100))
@@ -86,6 +95,27 @@ def fetch_eastmoney_history(
             continue
         if not all((open_price, close_price, high_price, low_price)):
             continue
+        if high_price < max(open_price, close_price) or low_price > min(
+            open_price, close_price
+        ):
+            continue
+        previous_close = (
+            close_price - provider_change
+            if provider_change is not None
+            else (result[-1]["close_price"] if result else None)
+        )
+        if previous_close is not None and previous_close <= 0:
+            previous_close = None
+        change = (
+            provider_change
+            if provider_change is not None
+            else (close_price - previous_close if previous_close is not None else None)
+        )
+        change_percent = provider_change_percent
+        if change_percent is None and previous_close is not None and change is not None:
+            change_percent = (
+                change / previous_close * Decimal("100")
+            ).quantize(Decimal("0.0001"))
         result.append(
             {
                 "trade_date": trade_date,
@@ -93,6 +123,9 @@ def fetch_eastmoney_history(
                 "high_price": high_price,
                 "low_price": low_price,
                 "close_price": close_price,
+                "prev_close": previous_close,
+                "change_amount": change,
+                "change_percent": change_percent,
                 "volume": volume,
                 "turnover": turnover,
             }
@@ -127,25 +160,74 @@ def upsert_stock_bars(db: Session, stock: Stock, rows: list[dict[str, Any]]) -> 
             "turnover",
         ):
             setattr(bar, field, row[field])
+        for field in ("prev_close", "change_amount", "change_percent"):
+            if field in row:
+                setattr(bar, field, row[field])
+
+
+def reconcile_authoritative_stock_bars(
+    db: Session,
+    stock: Stock,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Remove cached dates contradicted by a successful provider history pull."""
+    if not rows:
+        return
+    authoritative_dates = {row["trade_date"] for row in rows}
+    earliest_date = min(authoritative_dates)
+    latest_date = max(authoritative_dates)
+    for bar in db.scalars(
+        select(StockBar).where(StockBar.stock_id == stock.id)
+    ).all():
+        impossible_weekend = bar.trade_date.weekday() >= 5
+        missing_inside_window = (
+            earliest_date <= bar.trade_date <= latest_date
+            and bar.trade_date not in authoritative_dates
+        )
+        stale_future_snapshot = (
+            bar.trade_date > latest_date
+            and bar.trade_date != stock.quote_trade_date
+        )
+        if impossible_weekend or missing_inside_window or stale_future_snapshot:
+            db.delete(bar)
+
+
+def prune_impossible_weekend_bars(db: Session, stock: Stock) -> None:
+    """Weekend dates can never be A-share daily bars, even without network access."""
+    for bar in db.scalars(
+        select(StockBar).where(StockBar.stock_id == stock.id)
+    ).all():
+        if bar.trade_date.weekday() >= 5:
+            db.delete(bar)
 
 
 def upsert_latest_stock_bar(db: Session, stock: Stock) -> None:
     """Keep a truthful daily bar even when the historical endpoint is unavailable."""
-    if min(stock.price, stock.prev_close) <= 0:
+    if stock.quote_trade_date is None or min(stock.price, stock.prev_close) <= 0:
         return
-    trade_date = stock.updated_at.replace(tzinfo=UTC).astimezone(CHINA_TZ).date()
     open_price = stock.open_price if stock.open_price > 0 else stock.prev_close
-    high_price = stock.high_price if stock.high_price > 0 else max(open_price, stock.price)
-    low_price = stock.low_price if stock.low_price > 0 else min(open_price, stock.price)
+    high_price = max(stock.high_price, open_price, stock.price)
+    low_price = min(
+        stock.low_price if stock.low_price > 0 else min(open_price, stock.price),
+        open_price,
+        stock.price,
+    )
+    change = stock.price - stock.prev_close
+    change_percent = (
+        change / stock.prev_close * Decimal("100")
+    ).quantize(Decimal("0.0001"))
     upsert_stock_bars(
         db,
         stock,
         [{
-            "trade_date": trade_date,
+            "trade_date": stock.quote_trade_date,
             "open_price": open_price,
             "high_price": high_price,
             "low_price": low_price,
             "close_price": stock.price,
+            "prev_close": stock.prev_close,
+            "change_amount": change,
+            "change_percent": change_percent,
             "volume": stock.volume,
             "turnover": Decimal("0"),
         }],
@@ -155,13 +237,24 @@ def upsert_latest_stock_bar(db: Session, stock: Stock) -> None:
 def stock_history(db: Session, stock: Stock, limit: int) -> tuple[str, list[StockBar]]:
     """Return history from the provider when possible, otherwise cached snapshots."""
     source = "CACHED_HISTORY"
+    prune_impossible_weekend_bars(db, stock)
+    db.flush()
     cached_count = len(
         db.scalars(select(StockBar.id).where(StockBar.stock_id == stock.id)).all()
     )
+    incomplete_metric_count = db.scalar(
+        select(func.count(StockBar.id)).where(
+            StockBar.stock_id == stock.id,
+            StockBar.prev_close.is_(None),
+        )
+    ) or 0
     target_count = min(limit, HISTORY_CACHE_TARGET_BARS)
-    if cached_count < target_count:
+    # A single oldest row may legitimately lack a pre-window previous close.
+    # Multiple missing values identify a legacy cache that predates bar metrics.
+    if cached_count < target_count or incomplete_metric_count > 1:
         try:
             rows = fetch_eastmoney_history(stock.symbol, limit)
+            reconcile_authoritative_stock_bars(db, stock, rows)
             upsert_stock_bars(db, stock, rows)
             source = "EASTMONEY_HISTORY"
         except MarketDataError as exc:
@@ -205,6 +298,15 @@ def backfill_stock_history_once(
         .correlate(Stock)
         .scalar_subquery()
     )
+    incomplete_metric_count = (
+        select(func.count(StockBar.id))
+        .where(
+            StockBar.stock_id == Stock.id,
+            StockBar.prev_close.is_(None),
+        )
+        .correlate(Stock)
+        .scalar_subquery()
+    )
 
     def candidate(after_id: int) -> Stock | None:
         return db.scalar(
@@ -213,7 +315,7 @@ def backfill_stock_history_once(
                 Stock.id > after_id,
                 Stock.price > 0,
                 Stock.prev_close > 0,
-                bar_count < target_count,
+                or_(bar_count < target_count, incomplete_metric_count > 1),
             )
             .order_by(Stock.id.asc())
             .limit(1)
@@ -231,6 +333,7 @@ def backfill_stock_history_once(
             max(HISTORY_FETCH_LIMIT, target_count),
             max_wait_seconds=5.0,
         )
+        reconcile_authoritative_stock_bars(db, stock, rows)
         upsert_stock_bars(db, stock, rows)
         upsert_latest_stock_bar(db, stock)
         db.commit()

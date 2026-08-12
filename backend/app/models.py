@@ -150,6 +150,7 @@ class Stock(Base):
     high_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     low_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     volume: Mapped[int] = mapped_column(BigInteger, default=0)
+    quote_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -168,6 +169,13 @@ class StockBar(Base):
     high_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     low_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     close_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    prev_close: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    change_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    change_percent: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 4), nullable=True
+    )
     volume: Mapped[int] = mapped_column(BigInteger, default=0)
     turnover: Mapped[Decimal] = mapped_column(Numeric(22, 2), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

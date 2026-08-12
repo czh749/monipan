@@ -79,17 +79,43 @@ def tick_market(db: Session) -> int:
             quote = quotes.get(stock.symbol)
             if not quote:
                 continue
+            quote_trade_date = quote.get("quote_trade_date")
+            same_trade_date = (
+                quote_trade_date is not None
+                and stock.quote_trade_date == quote_trade_date
+            )
+            quoted_open = quote.get("open_price")
+            quoted_high = quote.get("high_price")
+            quoted_low = quote.get("low_price")
             stock.price = quote["price"]
             stock.prev_close = quote["prev_close"]
-            stock.open_price = quote["open_price"] or stock.open_price
-            stock.high_price = quote["high_price"] or stock.high_price
-            stock.low_price = quote["low_price"] or stock.low_price
-            if quote["volume"] is not None:
+            stock.open_price = (
+                quoted_open
+                or (stock.open_price if same_trade_date else stock.prev_close)
+            )
+            stock.high_price = max(
+                quoted_high
+                or (stock.high_price if same_trade_date else stock.open_price),
+                stock.open_price,
+                stock.price,
+            )
+            stock.low_price = min(
+                quoted_low
+                or (stock.low_price if same_trade_date else stock.open_price),
+                stock.open_price,
+                stock.price,
+            )
+            if quote.get("volume") is not None:
                 stock.volume = quote["volume"]
-            if quote["name"]:
+            elif not same_trade_date:
+                stock.volume = 0
+            if quote.get("name"):
                 stock.name = quote["name"]
+            if quote_trade_date is not None:
+                stock.quote_trade_date = quote_trade_date
             stock.updated_at = quote["updated_at"]
-            upsert_latest_stock_bar(db, stock)
+            if quote_trade_date is not None:
+                upsert_latest_stock_bar(db, stock)
             updated_count += 1
 
         db.commit()

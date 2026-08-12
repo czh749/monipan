@@ -51,6 +51,32 @@ def migrate_database() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
 
+    additive_market_columns = {
+        "stocks": {
+            "quote_trade_date": "DATE NULL",
+        },
+        "stock_bars": {
+            "prev_close": "NUMERIC(12, 2) NULL",
+            "change_amount": "NUMERIC(12, 2) NULL",
+            "change_percent": "NUMERIC(10, 4) NULL",
+        },
+    }
+    for table_name, definitions in additive_market_columns.items():
+        if table_name not in table_names:
+            continue
+        existing_columns = {
+            column["name"] for column in inspector.get_columns(table_name)
+        }
+        with engine.begin() as connection:
+            for column_name, definition in definitions.items():
+                if column_name not in existing_columns:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} ADD COLUMN "
+                            f"{column_name} {definition}"
+                        )
+                    )
+
     if "orders" in table_names:
         order_columns = {column["name"] for column in inspector.get_columns("orders")}
         if "limit_price" not in order_columns:

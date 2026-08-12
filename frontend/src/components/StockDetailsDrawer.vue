@@ -64,10 +64,14 @@ interface RenderedStockBar extends StockBar {
   candleWidth: number
   volumeY: number
   volumeHeight: number
-  rising: boolean
+  dayDirection: 'rise' | 'fall' | 'flat'
+  candleDirection: 'positive' | 'negative' | 'flat'
+  candleLabel: '阳线' | '阴线' | '十字线'
   previousClose: number | null
   changeAmount: number | null
   changePercent: number | null
+  openChangeAmount: number
+  openChangePercent: number | null
   amplitudePercent: number | null
   hitX: number
   hitWidth: number
@@ -78,6 +82,7 @@ interface ChartModel {
   guides: { y: number; label: number }[]
   dates: RenderedStockBar[]
   costY: number | null
+  costOutside: 'above' | 'below' | null
 }
 
 interface FinancialTrendPoint {
@@ -111,14 +116,21 @@ const chart = computed<ChartModel>(() => {
   const allBars = history.value?.bars ?? []
   const visibleStart = Math.max(0, allBars.length - 50)
   const bars = allBars.slice(visibleStart)
-  if (!bars.length) return { bars: [], guides: [], dates: [], costY: null as number | null }
+  if (!bars.length) {
+    return {
+      bars: [],
+      guides: [],
+      dates: [],
+      costY: null as number | null,
+      costOutside: null as 'above' | 'below' | null,
+    }
+  }
   const width = 760
   const priceTop = 20
   const priceHeight = 205
   const volumeTop = 258
   const volumeHeight = 58
   const values = bars.flatMap((bar) => [Number(bar.high_price), Number(bar.low_price)])
-  if (props.position) values.push(Number(props.position.average_cost))
   const rawMin = Math.min(...values)
   const rawMax = Math.max(...values)
   const padding = Math.max((rawMax - rawMin) * 0.08, rawMax * 0.005)
@@ -135,14 +147,32 @@ const chart = computed<ChartModel>(() => {
     const high = Number(bar.high_price)
     const low = Number(bar.low_price)
     const previousBar = allBars[visibleStart + index - 1]
-    const previousClose = previousBar ? Number(previousBar.close_price) : null
-    const changeAmount = previousClose === null ? null : close - previousClose
-    const changePercent = previousClose
-      ? changeAmount! / previousClose * 100
-      : null
-    const amplitudePercent = previousClose
+    const previousClose = finiteNumber(bar.prev_close)
+      ?? (previousBar ? Number(previousBar.close_price) : null)
+    const changeAmount = finiteNumber(bar.change)
+      ?? (previousClose === null ? null : close - previousClose)
+    const changePercent = finiteNumber(bar.change_percent)
+      ?? (previousClose && changeAmount !== null
+        ? changeAmount / previousClose * 100
+        : null)
+    const openChangeAmount = close - open
+    const openChangePercent = open > 0 ? openChangeAmount / open * 100 : null
+    const amplitudePercent = previousClose && previousClose > 0
       ? (high - low) / previousClose * 100
       : null
+    const dayDirection: RenderedStockBar['dayDirection'] = changeAmount === null
+      ? (openChangeAmount > 0 ? 'rise' : openChangeAmount < 0 ? 'fall' : 'flat')
+      : (changeAmount > 0 ? 'rise' : changeAmount < 0 ? 'fall' : 'flat')
+    const candleDirection: RenderedStockBar['candleDirection'] = openChangeAmount > 0
+      ? 'positive'
+      : openChangeAmount < 0
+        ? 'negative'
+        : 'flat'
+    const candleLabel: RenderedStockBar['candleLabel'] = candleDirection === 'positive'
+      ? '阳线'
+      : candleDirection === 'negative'
+        ? '阴线'
+        : '十字线'
     const x = index * step + step / 2
     return {
       ...bar,
@@ -155,10 +185,14 @@ const chart = computed<ChartModel>(() => {
       candleWidth,
       volumeY: volumeTop + volumeHeight - bar.volume / maxVolume * volumeHeight,
       volumeHeight: Math.max(1, bar.volume / maxVolume * volumeHeight),
-      rising: close >= open,
+      dayDirection,
+      candleDirection,
+      candleLabel,
       previousClose,
       changeAmount,
       changePercent,
+      openChangeAmount,
+      openChangePercent,
       amplitudePercent,
       hitX: index * step,
       hitWidth: step,
@@ -171,7 +205,22 @@ const chart = computed<ChartModel>(() => {
   const dateStep = Math.max(1, Math.floor(bars.length / 5))
   const dates = rendered.filter((_bar, index) => index % dateStep === 0 || index === bars.length - 1)
   const cost = props.position ? Number(props.position.average_cost) : null
-  return { bars: rendered, guides, dates, costY: cost === null ? null : y(cost) }
+  const validCost = cost !== null && Number.isFinite(cost) ? cost : null
+  const costOutside = validCost === null
+    ? null
+    : validCost > max
+      ? 'above'
+      : validCost < min
+        ? 'below'
+        : null
+  const costY = validCost === null
+    ? null
+    : costOutside === 'above'
+      ? priceTop
+      : costOutside === 'below'
+        ? priceTop + priceHeight
+        : y(validCost)
+  return { bars: rendered, guides, dates, costY, costOutside }
 })
 
 const hoveredBar = computed(() => {
@@ -355,6 +404,12 @@ const metricCards = computed(() => {
 function signedValue(value: number | null, suffix = '') {
   if (value === null) return '—'
   return `${value > 0 ? '+' : ''}${formatNumber(value)}${suffix}`
+}
+
+function finiteNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function compactMoney(value: string | number | null) {
@@ -737,7 +792,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
         <section v-if="activeTab === 'market'" class="kline-stage">
           <div class="chart-head">
-            <div><strong>日 K · 前复权</strong><span>最近 50 个交易日 · 悬停或点击 K 柱查看当日涨跌</span></div>
+            <div>
+              <strong>日 K · 前复权</strong>
+              <span>颜色看较昨收涨跌 · 空心阳线 / 实心阴线看开收方向</span>
+            </div>
             <div v-if="history" class="history-cache-state" :class="{ complete: history.complete }">
               <i></i>
               <span>
@@ -754,7 +812,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               viewBox="0 0 820 350"
               role="img"
               tabindex="0"
-              :aria-label="`${stock.name}日K线，使用左右方向键查看各交易日详情`"
+              :aria-label="`${stock.name}日K线，颜色表示较昨收涨跌，空心和实心表示开收方向；使用左右方向键查看各交易日详情`"
               @focus="selectLatestBar"
               @keydown.left.prevent="moveBarSelection(-1)"
               @keydown.right.prevent="moveBarSelection(1)"
@@ -768,15 +826,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                 <g
                   v-for="(bar, index) in chart.bars"
                   :key="bar.trade_date"
-                  :class="[bar.rising ? 'candle-rise' : 'candle-fall', { 'is-hovered': hoveredIndex === index }]"
+                  :class="[
+                    `candle-${bar.dayDirection}`,
+                    `candle-shape-${bar.candleDirection}`,
+                    { 'is-hovered': hoveredIndex === index },
+                  ]"
                 >
                   <line :x1="bar.x" :x2="bar.x" :y1="bar.wickTop" :y2="bar.wickBottom" class="candle-wick" />
                   <rect :x="bar.x - bar.candleWidth / 2" :y="bar.bodyTop" :width="bar.candleWidth" :height="bar.bodyHeight" class="candle-body" />
                   <rect :x="bar.x - bar.candleWidth / 2" :y="bar.volumeY" :width="bar.candleWidth" :height="bar.volumeHeight" class="volume-bar" />
                 </g>
                 <g v-if="chart.costY !== null" class="cost-line">
-                  <line x1="0" :y1="chart.costY" x2="760" :y2="chart.costY" />
-                  <text x="6" :y="chart.costY - 5">持仓成本 {{ formatNumber(position?.average_cost ?? 0, 4) }}</text>
+                  <line
+                    v-if="chart.costOutside === null"
+                    x1="0"
+                    :y1="chart.costY"
+                    x2="760"
+                    :y2="chart.costY"
+                  />
+                  <text
+                    x="6"
+                    :y="chart.costOutside === 'above' ? chart.costY + 11 : chart.costY - 5"
+                  >{{ chart.costOutside === 'above' ? '↑ ' : chart.costOutside === 'below' ? '↓ ' : '' }}持仓成本 {{ formatNumber(position?.average_cost ?? 0, 4) }}{{ chart.costOutside ? '（图外）' : '' }}</text>
                 </g>
                 <g v-for="bar in chart.dates" :key="`date-${bar.trade_date}`">
                   <text :x="bar.x" y="340" text-anchor="middle" class="chart-date">{{ bar.trade_date.slice(5) }}</text>
@@ -810,10 +881,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                 <div><span>TRADE DAY</span><strong>{{ hoveredBar.trade_date }}</strong></div>
                 <b :class="riseClass(hoveredBar.changeAmount ?? 0)">{{ signedValue(hoveredBar.changePercent, '%') }}</b>
               </header>
-              <div class="kline-tooltip-delta">
-                <span>较前收涨跌</span>
-                <strong :class="riseClass(hoveredBar.changeAmount ?? 0)">{{ signedValue(hoveredBar.changeAmount) }}</strong>
-                <small>昨收 {{ hoveredBar.previousClose === null ? '—' : formatNumber(hoveredBar.previousClose) }}</small>
+              <div class="kline-tooltip-deltas">
+                <div class="kline-tooltip-delta">
+                  <span>较昨收</span>
+                  <strong :class="riseClass(hoveredBar.changeAmount ?? 0)">{{ signedValue(hoveredBar.changeAmount) }}</strong>
+                  <small>昨收 {{ hoveredBar.previousClose === null ? '—' : formatNumber(hoveredBar.previousClose) }}</small>
+                </div>
+                <div class="kline-tooltip-delta secondary">
+                  <span>开收变化</span>
+                  <strong :class="riseClass(hoveredBar.openChangeAmount)">{{ signedValue(hoveredBar.openChangePercent, '%') }}</strong>
+                  <small>{{ hoveredBar.candleLabel }}</small>
+                </div>
               </div>
               <dl>
                 <div><dt>开盘</dt><dd>{{ formatNumber(hoveredBar.open_price) }}</dd></div>

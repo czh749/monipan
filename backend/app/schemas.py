@@ -137,6 +137,9 @@ class StockBarOut(BaseModel):
     high_price: Decimal
     low_price: Decimal
     close_price: Decimal
+    prev_close: Decimal | None
+    change: Decimal | None
+    change_percent: Decimal | None
     volume: int
     turnover: Decimal
 

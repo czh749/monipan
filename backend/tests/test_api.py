@@ -1683,6 +1683,9 @@ def test_eastmoney_request_uses_browser_headers(monkeypatch) -> None:
                             "f16": 1488.00,
                             "f17": 1499.00,
                             "f18": 1498.00,
+                            "f124": int(
+                                datetime(2026, 8, 11, 2, tzinfo=UTC).timestamp()
+                            ),
                         }
                     ]
                 }
@@ -1720,9 +1723,97 @@ def test_eastmoney_request_uses_browser_headers(monkeypatch) -> None:
     assert quotes["600519"]["open_price"] == Decimal("1499.00")
     assert quotes["600519"]["high_price"] == Decimal("1510.00")
     assert quotes["600519"]["low_price"] == Decimal("1488.00")
+    assert quotes["600519"]["quote_trade_date"] == date(2026, 8, 11)
     assert quotes.stats.successful_batches == 1
     assert quotes.stats.success_percent == Decimal("100.0")
     assert quotes.stats.fallback_used is False
+
+
+def test_history_uses_provider_change_metrics_for_gap_bar(monkeypatch) -> None:
+    """跳空低开后收涨的阳线，日涨跌仍须保留数据源给出的负值。"""
+    requested_params: dict[str, str] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {
+                "data": {
+                    "klines": [
+                        "2026-08-10,90,95,96,89,1000,950000,7.00,-5.00,-5.00,1.20"
+                    ]
+                }
+            }
+
+    def fake_get(*_args, **kwargs) -> FakeResponse:
+        requested_params.update(kwargs["params"])
+        return FakeResponse()
+
+    monkeypatch.setattr(history_service, "_history_next_request_at", 0.0)
+    monkeypatch.setattr(history_service.requests, "get", fake_get)
+
+    rows = history_service.fetch_eastmoney_history("600519", 20)
+
+    assert "f59" in requested_params["fields2"]
+    assert "f60" in requested_params["fields2"]
+    assert rows[0]["prev_close"] == Decimal("100.00")
+    assert rows[0]["change_amount"] == Decimal("-5.00")
+    assert rows[0]["change_percent"] == Decimal("-5.00")
+    assert rows[0]["open_price"] < rows[0]["close_price"]
+
+
+def test_latest_snapshot_requires_provider_trade_date() -> None:
+    """请求时间不能冒充交易日，缺少源交易日时不得制造新 K 线。"""
+    with SessionLocal() as db:
+        stock = db.scalar(select(Stock).where(Stock.symbol == "000001"))
+        assert stock is not None
+        original_count = len(
+            db.scalars(
+                select(StockBar.id).where(StockBar.stock_id == stock.id)
+            ).all()
+        )
+        stock.quote_trade_date = None
+        stock.price = Decimal("9.50")
+        stock.prev_close = Decimal("10.00")
+
+        history_service.upsert_latest_stock_bar(db, stock)
+        db.flush()
+
+        assert len(
+            db.scalars(
+                select(StockBar.id).where(StockBar.stock_id == stock.id)
+            ).all()
+        ) == original_count
+        db.rollback()
+
+
+def test_latest_snapshot_persists_both_daily_and_candle_directions() -> None:
+    """低开反弹应同时保留阳线和日跌幅，供前端分别编码。"""
+    with SessionLocal() as db:
+        stock = db.scalar(select(Stock).where(Stock.symbol == "000001"))
+        assert stock is not None
+        stock.quote_trade_date = date(2026, 8, 10)
+        stock.prev_close = Decimal("10.00")
+        stock.open_price = Decimal("9.00")
+        stock.high_price = Decimal("9.60")
+        stock.low_price = Decimal("8.90")
+        stock.price = Decimal("9.50")
+
+        history_service.upsert_latest_stock_bar(db, stock)
+        db.flush()
+        bar = db.scalar(
+            select(StockBar).where(
+                StockBar.stock_id == stock.id,
+                StockBar.trade_date == date(2026, 8, 10),
+            )
+        )
+
+        assert bar is not None
+        assert bar.close_price > bar.open_price
+        assert bar.change_amount == Decimal("-0.50")
+        assert bar.change_percent == Decimal("-5.0000")
+        db.rollback()
 
 
 def test_failed_quote_batch_is_retried_after_cooldown(monkeypatch) -> None:
@@ -1892,6 +1983,7 @@ def test_real_quote_overwrites_selected_stock(monkeypatch) -> None:
                 "high_price": Decimal("1510.00"),
                 "low_price": Decimal("1488.00"),
                 "volume": 12_345_600,
+                "quote_trade_date": date(2026, 8, 11),
                 "updated_at": fetched_at,
             }
         }
@@ -1908,6 +2000,7 @@ def test_real_quote_overwrites_selected_stock(monkeypatch) -> None:
             "high_price": stock.high_price,
             "low_price": stock.low_price,
             "volume": stock.volume,
+            "quote_trade_date": stock.quote_trade_date,
             "updated_at": stock.updated_at,
         }
         try:
@@ -1917,6 +2010,12 @@ def test_real_quote_overwrites_selected_stock(monkeypatch) -> None:
             assert stock.volume == 12_345_600
             assert stock.updated_at == fetched_at
         finally:
+            db.execute(
+                delete(StockBar).where(
+                    StockBar.stock_id == stock.id,
+                    StockBar.trade_date == date(2026, 8, 11),
+                )
+            )
             for field, value in original.items():
                 setattr(stock, field, value)
             db.commit()
@@ -2123,20 +2222,30 @@ def test_stock_history_uses_cached_bars() -> None:
     with SessionLocal() as db:
         stock = db.scalar(select(Stock).where(Stock.symbol == "600519"))
         assert stock is not None
+        trade_date = date(2026, 1, 5)
         for offset in range(20):
+            while trade_date.weekday() >= 5:
+                trade_date += timedelta(days=1)
             price = Decimal("10") + Decimal(offset) / Decimal("10")
+            change_percent = (
+                Decimal("0.05") / price * Decimal("100")
+            ).quantize(Decimal("0.0001"))
             db.add(
                 StockBar(
                     stock_id=stock.id,
-                    trade_date=(datetime(2026, 1, 1) + timedelta(days=offset)).date(),
+                    trade_date=trade_date,
                     open_price=price,
                     high_price=price + Decimal("0.10"),
                     low_price=price - Decimal("0.10"),
                     close_price=price + Decimal("0.05"),
+                    prev_close=price,
+                    change_amount=Decimal("0.05"),
+                    change_percent=change_percent,
                     volume=1_000_000,
                     turnover=Decimal("0"),
                 )
             )
+            trade_date += timedelta(days=1)
         db.commit()
 
     with TestClient(app) as client:
@@ -2148,6 +2257,8 @@ def test_stock_history_uses_cached_bars() -> None:
     assert payload["target_count"] == 20
     assert payload["complete"] is True
     assert len(payload["bars"]) == 20
+    assert payload["bars"][-1]["prev_close"] is not None
+    assert Decimal(payload["bars"][-1]["change_percent"]) > 0
 
 
 def test_history_between_20_and_49_bars_is_still_backfilled(monkeypatch) -> None:

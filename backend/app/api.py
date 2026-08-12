@@ -318,6 +318,38 @@ def get_stock_history(
         raise HTTPException(status_code=404, detail="股票不存在")
     source, bars = stock_history(db, stock, limit)
     target_count = min(limit, HISTORY_CACHE_TARGET_BARS)
+    serialized_bars: list[dict] = []
+    for index, bar in enumerate(bars):
+        previous_close = bar.prev_close
+        if previous_close is None and index > 0:
+            previous_close = bars[index - 1].close_price
+        change = bar.change_amount
+        if change is None and previous_close is not None:
+            change = bar.close_price - previous_close
+        change_percent = bar.change_percent
+        if (
+            change_percent is None
+            and previous_close is not None
+            and previous_close > 0
+            and change is not None
+        ):
+            change_percent = (
+                change / previous_close * Decimal("100")
+            ).quantize(Decimal("0.0001"))
+        serialized_bars.append(
+            {
+                "trade_date": bar.trade_date,
+                "open_price": bar.open_price,
+                "high_price": bar.high_price,
+                "low_price": bar.low_price,
+                "close_price": bar.close_price,
+                "prev_close": previous_close,
+                "change": change,
+                "change_percent": change_percent,
+                "volume": bar.volume,
+                "turnover": bar.turnover,
+            }
+        )
     return {
         "symbol": symbol,
         "period": "DAY",
@@ -325,18 +357,7 @@ def get_stock_history(
         "cached_count": len(bars),
         "target_count": target_count,
         "complete": len(bars) >= target_count,
-        "bars": [
-            {
-                "trade_date": bar.trade_date,
-                "open_price": bar.open_price,
-                "high_price": bar.high_price,
-                "low_price": bar.low_price,
-                "close_price": bar.close_price,
-                "volume": bar.volume,
-                "turnover": bar.turnover,
-            }
-            for bar in bars
-        ],
+        "bars": serialized_bars,
     }
 
 

@@ -138,6 +138,9 @@ export interface StockBar {
   high_price: string
   low_price: string
   close_price: string
+  prev_close: string | null
+  change: string | null
+  change_percent: string | null
   volume: number
   turnover: string
 }

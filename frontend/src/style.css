@@ -4403,12 +4403,17 @@ select {
 }
 
 .candle-rise,
-.candle-fall {
+.candle-fall,
+.candle-flat {
   color: var(--market-rise);
 }
 
 .candle-fall {
   color: var(--market-fall);
+}
+
+.candle-flat {
+  color: var(--signal-faint);
 }
 
 .candle-wick {
@@ -4419,6 +4424,16 @@ select {
 .candle-body,
 .volume-bar {
   fill: currentColor;
+}
+
+.candle-shape-positive .candle-body {
+  fill: transparent;
+  stroke: currentColor;
+  stroke-width: 1.1;
+}
+
+.candle-shape-flat .candle-body {
+  opacity: .72;
 }
 
 .volume-bar {
@@ -4464,7 +4479,7 @@ select {
   z-index: 2;
   top: 14px;
   left: calc(var(--kline-anchor) + 12px);
-  width: 238px;
+  width: 252px;
   padding: 11px 12px 12px;
   border: 1px solid var(--deck-line-strong);
   border-radius: var(--radius-control);
@@ -4511,13 +4526,25 @@ select {
   font-size: 15px;
 }
 
-.kline-tooltip-delta {
+.kline-tooltip-deltas {
   margin-top: 8px;
-  padding: 7px 0;
   border-top: 1px solid var(--deck-line);
   border-bottom: 1px solid var(--deck-line);
+}
+
+.kline-tooltip-delta {
+  padding: 7px 0;
   font-family: var(--mono);
   font-size: 10px;
+}
+
+.kline-tooltip-delta + .kline-tooltip-delta {
+  border-top: 1px solid color-mix(in oklch, var(--deck-line), transparent 28%);
+}
+
+.kline-tooltip-delta.secondary strong {
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .kline-tooltip-delta span,

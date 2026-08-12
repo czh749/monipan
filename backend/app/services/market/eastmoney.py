@@ -9,7 +9,7 @@
 import math
 import random
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -18,6 +18,7 @@ import requests
 from ...market_index_pool import MARKET_INDEX_POOL
 from .constants import (
     CENT,
+    CHINA_TZ,
     EASTMONEY_CONSECUTIVE_FAILURE_LIMIT,
     EASTMONEY_FAILURE_PAUSE_SECONDS,
     EASTMONEY_FIRST_PASS_INTERVAL_SECONDS,
@@ -84,6 +85,30 @@ def _volume_in_shares(value: Any) -> int | None:
     return int(lots * 100)
 
 
+def _quote_trade_date(value: Any) -> date | None:
+    """Parse the provider's last-trade timestamp into a China-market date.
+
+    ``f124`` is deliberately kept separate from ``fetched_at``.  During a
+    weekend or exchange holiday the endpoint can still return Friday's quote;
+    using the HTTP request time would manufacture a bar for a non-trading day.
+    """
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        return None
+    if timestamp >= 1_000_000_000_000:
+        timestamp /= 1000
+    try:
+        parsed = datetime.fromtimestamp(timestamp, UTC).astimezone(CHINA_TZ)
+    except (OSError, OverflowError, ValueError):
+        return None
+    if parsed.year < 2000 or parsed.year > 2100:
+        return None
+    return parsed.date()
+
+
 def _eastmoney_secid(symbol: str) -> str:
     """东财沪市代码使用 1 前缀，深市代码使用 0 前缀。"""
     return f"{'1' if symbol.startswith('6') else '0'}.{symbol}"
@@ -136,6 +161,7 @@ def _fetch_eastmoney_quote_batch(
             "high_price": _positive_decimal(row.get("f15")),
             "low_price": _positive_decimal(row.get("f16")),
             "volume": _volume_in_shares(row.get("f5")),
+            "quote_trade_date": _quote_trade_date(row.get("f124")),
             "updated_at": fetched_at,
         }
     return quotes, None
@@ -148,7 +174,7 @@ def fetch_eastmoney_quotes(symbols: list[str]) -> QuoteFetchResult:
     调用方传入的代码顺序会被保留。第一遍请求均匀摊开；连续失败时自动暂停，
     第一遍失败的批次在统一冷却后才进入第二遍，避免短时间立即重试放大限流。
     """
-    fields = "f2,f5,f12,f14,f15,f16,f17,f18"
+    fields = "f2,f5,f12,f14,f15,f16,f17,f18,f124"
 
     # 延迟导入：测试通过 monkeypatch.setattr(market, "EASTMONEY_BATCH_SIZE", 5)
     # 来模拟多批次场景，必须从包级别查找才能看到 patch 后的值。
