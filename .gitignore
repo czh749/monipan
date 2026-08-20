@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .venv/
+.pytest_cache/
 .env
 
 # Node
@@ -24,3 +25,6 @@ dist/
 
 # Docker
 .docker/
+
+# Local database backups
+/backups/

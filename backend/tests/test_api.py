@@ -31,14 +31,17 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 # 集成测试必须离线、可重复，禁止在应用生命周期中请求真实行情。
+os.environ["MONIPAN_ENVIRONMENT"] = "test"
 os.environ["MONIPAN_DISABLE_MARKET_LOOP"] = "1"
+os.environ["MONIPAN_COOKIE_SECURE"] = "0"
 TEST_DATABASE_PATH = (
     Path(tempfile.gettempdir()) / f"monipan-test-{uuid4().hex}.db"
 )
@@ -49,6 +52,7 @@ os.environ["MONIPAN_DATABASE_URL"] = (
     f"sqlite:///{TEST_DATABASE_PATH.as_posix()}"
 )
 
+from app import auth as app_auth
 from app.database import Base, SessionLocal, engine
 from app.auth import hash_invite_code
 from app.agent import (
@@ -310,13 +314,88 @@ def test_health_and_stock_pool() -> None:
     # TestClient 作为上下文管理器，自动管理连接生命周期
     with TestClient(app) as client:
         # 健康检查
-        assert client.get("/health").json() == {"status": "ok"}
+        health = client.get("/health", headers={"X-Request-ID": "health-test"})
+        assert health.status_code == 200
+        assert health.json() == {"status": "ok"}
+        assert health.headers["X-Request-ID"] == "health-test"
+        assert health.headers["Cache-Control"] == "no-store"
+        liveness = client.get("/livez", headers={"X-Request-ID": "x" * 100})
+        assert liveness.status_code == 200
+        assert liveness.json() == {"status": "ok"}
+        assert re.fullmatch(r"[0-9a-f]{32}", liveness.headers["X-Request-ID"])
+        readiness = client.get("/readyz")
+        assert readiness.status_code == 200
+        assert readiness.json() == {
+            "status": "ok",
+            "database": "ok",
+        }
+        assert readiness.headers["Cache-Control"] == "no-store"
 
         # 股票列表
+        register_test_user(client)
         response = client.get("/api/stocks")
         assert response.status_code == 200
         # 验证恰好 200 只股票
         assert len(response.json()) == 200
+
+
+def test_readiness_hides_database_failure_details(monkeypatch) -> None:
+    def unavailable_session():
+        raise SQLAlchemyError("sensitive database failure")
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(app_main, "SessionLocal", unavailable_session)
+        response = client.get("/readyz")
+        health = client.get("/health")
+        liveness = client.get("/livez")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "database": "unavailable",
+    }
+    assert "sensitive" not in response.text
+    assert response.headers["Cache-Control"] == "no-store"
+    assert re.fullmatch(r"[0-9a-f]{32}", response.headers["X-Request-ID"])
+    assert health.status_code == 200
+    assert liveness.status_code == 200
+
+
+def test_runtime_configuration_validation_runs_during_lifespan(monkeypatch) -> None:
+    calls = 0
+
+    def validate_once():
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(environment="test")
+
+    monkeypatch.setattr(app_main, "validate_runtime_configuration", validate_once)
+    with TestClient(app):
+        pass
+
+    assert calls == 1
+
+
+def test_session_cookie_uses_secure_production_attributes(monkeypatch) -> None:
+    monkeypatch.setattr(app_auth, "COOKIE_SECURE", True)
+
+    response = Response()
+    app_auth.set_session_cookie(response, "opaque-token")
+    cookie = response.headers["set-cookie"].lower()
+
+    assert "secure" in cookie
+    assert "httponly" in cookie
+    assert "samesite=lax" in cookie
+    assert "path=/" in cookie
+    assert "max-age=" in cookie
+
+    cleared = Response()
+    app_auth.clear_session_cookie(cleared)
+    cleared_cookie = cleared.headers["set-cookie"].lower()
+    assert "secure" in cleared_cookie
+    assert "httponly" in cleared_cookie
+    assert "samesite=lax" in cleared_cookie
+    assert "path=/" in cleared_cookie
 
 
 def test_market_seed_does_not_recreate_demo_user() -> None:
@@ -327,10 +406,21 @@ def test_market_seed_does_not_recreate_demo_user() -> None:
 
 def test_private_api_requires_authentication() -> None:
     with TestClient(app) as client:
-        assert client.get("/api/stocks").status_code == 200
-        response = client.get("/api/account")
-        assert response.status_code == 401
-        assert response.headers["www-authenticate"] == "Session"
+        protected_paths = (
+            "/api/stocks",
+            "/api/stocks/600519",
+            "/api/stocks/600519/history",
+            "/api/stocks/600519/fundamentals",
+            "/api/stocks/600519/announcements",
+            "/api/stocks/600519/regulatory-letters",
+            "/api/market/status",
+            "/api/market/indices",
+            "/api/account",
+        )
+        for path in protected_paths:
+            response = client.get(path)
+            assert response.status_code == 401, path
+            assert response.headers["www-authenticate"] == "Session"
 
 
 def test_manual_market_tick_is_not_exposed() -> None:
@@ -555,6 +645,7 @@ def test_user_orders_and_watchlist_are_isolated() -> None:
 def test_market_status_exposes_source_and_freshness_policy() -> None:
     """行情状态接口需要明确真实来源、刷新阈值、覆盖率和模拟交易边界。"""
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/market/status")
 
     assert response.status_code == 200
@@ -646,6 +737,7 @@ def test_stock_fundamentals_refreshes_once_then_uses_cache(monkeypatch) -> None:
     )
 
     with TestClient(app) as client:
+        register_test_user(client)
         first = client.get("/api/stocks/600519/fundamentals")
         second = client.get("/api/stocks/600519/fundamentals")
 
@@ -702,6 +794,7 @@ def test_stock_announcements_refreshes_then_uses_cache(monkeypatch) -> None:
     )
 
     with TestClient(app) as client:
+        register_test_user(client)
         first = client.get("/api/stocks/600519/announcements")
         second = client.get("/api/stocks/600519/announcements")
 
@@ -872,6 +965,7 @@ def test_stock_announcements_uses_stale_cache_on_source_failure(monkeypatch) -> 
         fail_fetch,
     )
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/stocks/600519/announcements")
 
     assert response.status_code == 200, response.text
@@ -911,6 +1005,7 @@ def test_stock_announcements_selects_szse_provider(monkeypatch) -> None:
         fake_announcements,
     )
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/stocks/000001/announcements")
 
     assert response.status_code == 200, response.text
@@ -956,6 +1051,7 @@ def test_stock_regulatory_letters_refreshes_then_uses_cache(monkeypatch) -> None
         fake_letters,
     )
     with TestClient(app) as client:
+        register_test_user(client)
         first = client.get("/api/stocks/000001/regulatory-letters")
         second = client.get("/api/stocks/000001/regulatory-letters")
 
@@ -1134,6 +1230,7 @@ def test_sse_regulatory_links_cached_reply_announcement(monkeypatch) -> None:
         fake_letters,
     )
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/stocks/600519/regulatory-letters")
 
     assert response.status_code == 200, response.text
@@ -1182,6 +1279,7 @@ def test_stock_regulatory_letters_uses_stale_cache(monkeypatch) -> None:
         fail_fetch,
     )
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/stocks/600519/regulatory-letters")
 
     assert response.status_code == 200, response.text
@@ -1613,6 +1711,7 @@ def test_market_status_is_partial_when_latest_refresh_is_incomplete() -> None:
 def test_market_indices_returns_five_benchmarks() -> None:
     """大盘接口按固定顺序返回五个主要 A 股指数。"""
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/market/indices")
 
     assert response.status_code == 200
@@ -2249,6 +2348,7 @@ def test_stock_history_uses_cached_bars() -> None:
         db.commit()
 
     with TestClient(app) as client:
+        register_test_user(client)
         response = client.get("/api/stocks/600519/history?limit=20")
     assert response.status_code == 200, response.text
     payload = response.json()

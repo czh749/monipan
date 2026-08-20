@@ -244,7 +244,11 @@ def order_values(order: Order) -> dict:
 # 股票行情
 # ===========================================================================
 
-@router.get("/stocks", response_model=list[StockOut])
+@router.get(
+    "/stocks",
+    response_model=list[StockOut],
+    dependencies=[Depends(get_current_user)],
+)
 def list_stocks(
     keyword: str = Query(default="", max_length=40),
     industry: str = Query(default="", max_length=40),
@@ -289,7 +293,11 @@ def list_stocks(
     return [stock_values(stock) for stock in db.scalars(query).all()]
 
 
-@router.get("/stocks/{symbol}", response_model=StockOut)
+@router.get(
+    "/stocks/{symbol}",
+    response_model=StockOut,
+    dependencies=[Depends(get_current_user)],
+)
 def get_stock(symbol: str, db: Session = Depends(get_db)) -> dict:
     """
     获取单只股票的详细行情。
@@ -307,7 +315,11 @@ def get_stock(symbol: str, db: Session = Depends(get_db)) -> dict:
     return stock_values(stock)
 
 
-@router.get("/stocks/{symbol}/history", response_model=StockHistoryOut)
+@router.get(
+    "/stocks/{symbol}/history",
+    response_model=StockHistoryOut,
+    dependencies=[Depends(get_current_user)],
+)
 def get_stock_history(
     symbol: str,
     limit: int = Query(default=90, ge=20, le=240),
@@ -364,6 +376,7 @@ def get_stock_history(
 @router.get(
     "/stocks/{symbol}/fundamentals",
     response_model=StockFundamentalsOut,
+    dependencies=[Depends(get_current_user)],
 )
 def get_stock_fundamentals(
     symbol: str,
@@ -382,6 +395,7 @@ def get_stock_fundamentals(
 @router.get(
     "/stocks/{symbol}/announcements",
     response_model=StockAnnouncementsOut,
+    dependencies=[Depends(get_current_user)],
 )
 def get_stock_announcements(
     symbol: str,
@@ -407,6 +421,7 @@ def get_stock_announcements(
 @router.get(
     "/stocks/{symbol}/regulatory-letters",
     response_model=StockRegulatoryLettersOut,
+    dependencies=[Depends(get_current_user)],
 )
 def get_stock_regulatory_letters(
     symbol: str,
@@ -566,13 +581,21 @@ def remove_watchlist_item(
         db.commit()
 
 
-@router.get("/market/status", response_model=MarketStatusOut)
+@router.get(
+    "/market/status",
+    response_model=MarketStatusOut,
+    dependencies=[Depends(get_current_user)],
+)
 def market_status(db: Session = Depends(get_db)) -> dict:
     """返回行情来源、最近刷新、覆盖率和时段感知的新鲜度状态。"""
     return market_status_values(db)
 
 
-@router.get("/market/indices", response_model=list[MarketIndexOut])
+@router.get(
+    "/market/indices",
+    response_model=list[MarketIndexOut],
+    dependencies=[Depends(get_current_user)],
+)
 def market_indices(db: Session = Depends(get_db)) -> list[dict]:
     """返回已取得真实快照的五个主要 A 股指数。"""
     items = db.scalars(

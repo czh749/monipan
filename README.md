@@ -136,6 +136,7 @@ docker compose down -v
 数据库名称、用户名和密码可通过项目根目录的 `.env` 覆盖：
 
 ```dotenv
+MONIPAN_ENVIRONMENT=development
 MONIPAN_MYSQL_DATABASE=monipan
 MONIPAN_MYSQL_USER=monipan
 MONIPAN_MYSQL_PASSWORD=请替换为安全密码
@@ -143,6 +144,8 @@ MONIPAN_MYSQL_ROOT_PASSWORD=请替换为另一个安全密码
 MONIPAN_SESSION_DAYS=7
 # 上线 HTTPS 后必须设为 1；本地 http://localhost 保持 0
 MONIPAN_COOKIE_SECURE=0
+# 单实例默认启用行情后台任务；临时诊断实例设为 1
+MONIPAN_DISABLE_MARKET_LOOP=0
 # 注册：同一 IP 每小时最多 3 次
 MONIPAN_REGISTER_IP_LIMIT=3
 MONIPAN_REGISTER_WINDOW_SECONDS=3600
@@ -168,7 +171,34 @@ DEEPSEEK_API_KEY=请填写你的DeepSeek密钥
 ```
 
 `.env` 已被 Git 忽略。MySQL 端口只暴露在 Docker 内部网络，不会映射到宿主机。
-Docker 的公网 Nginx 会隐藏 `/docs`、`/redoc`、`/openapi.json`，并对登录、注册、AI 和普通 API 增加第一层 IP 限流。手动行情刷新接口已删除，行情只由后台循环更新。
+容器内 Nginx 会隐藏 `/docs`、`/redoc`、`/openapi.json`，并对登录、注册、AI 和普通 API 增加第一层 IP 限流。手动行情刷新接口已删除，行情只由后台循环更新。
+
+### 审核期线上加固
+
+本地开发保持 `MONIPAN_ENVIRONMENT=development`。确认外层 HTTPS、数据库密码和现有 MySQL 用户密码已经一致后，线上应显式设置：
+
+```dotenv
+MONIPAN_ENVIRONMENT=production
+MONIPAN_COOKIE_SECURE=1
+```
+
+如果审核环境仍通过纯 HTTP 访问，请暂时保留 development 和非 Secure Cookie；否则浏览器不会在 HTTP 请求中发送登录 Cookie。切换 production 前必须先完成 HTTPS 冒烟测试。
+
+显式 production 模式会拒绝 SQLite、开发默认数据库密码和非 Secure Cookie。Compose 还会限制三个容器的本地 JSON 日志大小，并使用数据库就绪检查判断后端是否可接收请求。
+
+健康检查分为：
+
+- `/health`：保留原有兼容响应；
+- `/livez`：只检查后端进程存活；
+- `/readyz`：额外执行数据库 `SELECT 1`，失败时返回不包含连接信息的 503。
+
+手动生成带校验值的 MySQL 备份：
+
+```sh
+sh scripts/backup_mysql.sh
+```
+
+脚本不会自动配置定时任务，也不会执行恢复。生产代理盘点、备份保留、恢复演练和发布回滚步骤见 [`docs/production-hardening.md`](docs/production-hardening.md)。生产变量占位示例见 [`.env.production.example`](.env.production.example)。
 
 认证接口：
 
@@ -177,7 +207,7 @@ Docker 的公网 Nginx 会隐藏 `/docs`、`/redoc`、`/openapi.json`，并对�
 - `GET /api/auth/me`：获取当前登录用户
 - `POST /api/auth/logout`：注销当前会话
 
-账户、持仓、自选、委托和成交接口都要求登录；股票行情、K 线、大盘指数与行情状态保持公开读取。
+除健康检查外，账户、股票行情、K 线、财务与公告、大盘、持仓、自选、委托和成交接口均要求登录。
 
 注册必须使用服务器生成的一次性邀请码。邀请码原文只在生成时显示一次，数据库只保存哈希；成功注册后立即失效。生成 5 个有效期为 30 天的邀请码：
 

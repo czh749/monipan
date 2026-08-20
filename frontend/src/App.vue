@@ -667,7 +667,15 @@ onBeforeUnmount(() => {
 
     <footer>
       <span>MONIPAN / MARKET PRACTICE SYSTEM</span>
-      <span>股票行情来自东方财富公开接口 · 账户与成交均为模拟数据 · 不构成投资建议</span>
+      <span>
+        股票行情来自东方财富公开接口 · 账户与成交均为模拟数据 · 不构成投资建议 ·
+        <a
+          class="site-record-link"
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >苏ICP备2026059082号-1</a>
+      </span>
       <span>REAL QUOTES · SIMULATED ORDERS</span>
     </footer>
   </div>

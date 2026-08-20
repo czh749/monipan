@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   mysql:
     image: mysql:8.4
@@ -15,10 +21,11 @@ services:
     expose:
       - "3306"
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test:
         - CMD-SHELL
-        - mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent
+        - mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}" --silent
       interval: 5s
       timeout: 5s
       retries: 20
@@ -28,7 +35,9 @@ services:
     build:
       context: ./backend
     environment:
+      MONIPAN_ENVIRONMENT: ${MONIPAN_ENVIRONMENT:-development}
       MONIPAN_DATABASE_URL: mysql+pymysql://${MONIPAN_MYSQL_USER:-monipan}:${MONIPAN_MYSQL_PASSWORD:-monipan_local_only}@mysql:3306/${MONIPAN_MYSQL_DATABASE:-monipan}?charset=utf8mb4
+      MONIPAN_DISABLE_MARKET_LOOP: ${MONIPAN_DISABLE_MARKET_LOOP:-0}
       MONIPAN_MARKET_INTERVAL: "300"
       MONIPAN_HISTORY_INITIAL_DELAY: "90"
       MONIPAN_HISTORY_INTERVAL: "4"
@@ -71,12 +80,14 @@ services:
       - "8000"
     init: true
     restart: unless-stopped
+    stop_grace_period: 5m
+    logging: *default-logging
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"
       interval: 10s
       timeout: 3s
       retries: 5
@@ -92,8 +103,9 @@ services:
         condition: service_healthy
     init: true
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 10s
       timeout: 3s
       retries: 5

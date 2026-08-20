@@ -2229,6 +2229,24 @@ footer {
   letter-spacing: .04em;
 }
 
+.site-record-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 150ms var(--ease-out);
+}
+
+.site-record-link:hover {
+  color: var(--signal-white);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.site-record-link:focus-visible {
+  color: var(--signal-white);
+  outline: 1px solid currentColor;
+  outline-offset: 3px;
+}
+
 @keyframes market-pulse {
   0%, 100% { height: 4px; opacity: .22; }
   50% { height: 15px; opacity: .9; }

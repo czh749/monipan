@@ -30,14 +30,20 @@ Docker 部署：
 import asyncio
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager, suppress
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from .api import router
 from .database import Base, SessionLocal, engine, migrate_database
+from .runtime_config import validate_runtime_configuration
 from .seed import seed_database
 from .services.market import (
     MarketDataError,
@@ -50,6 +56,8 @@ from .services.market import (
 
 
 logger = logging.getLogger("uvicorn.error")
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+QUIET_REQUEST_PATHS = frozenset({"/health", "/livez", "/readyz"})
 INDEX_REFRESH_COOLDOWN_SECONDS = 60
 HISTORY_BACKFILL_INITIAL_DELAY_SECONDS = int(
     os.getenv("MONIPAN_HISTORY_INITIAL_DELAY", "90")
@@ -179,6 +187,10 @@ async def lifespan(_app: FastAPI):
     """
     # ============ 启动阶段 ============
 
+    # 0. 显式生产模式下拒绝开发用数据库密码和非 Secure Cookie。
+    runtime = validate_runtime_configuration()
+    logger.info("运行配置校验完成：environment=%s", runtime.environment)
+
     # 1. 自动创建数据库表
     #    create_all 只会创建不存在的表，已存在的表不受影响
     #    bind=engine 指定使用哪个数据库引擎
@@ -230,6 +242,48 @@ app = FastAPI(
     lifespan=lifespan,  # 绑定生命周期管理器
 )
 
+
+def request_id_for(request: Request) -> str:
+    """Reuse a well-formed edge request ID, otherwise create a local one."""
+
+    candidate = request.headers.get("x-request-id", "").strip()
+    if REQUEST_ID_PATTERN.fullmatch(candidate):
+        return candidate
+    return uuid4().hex
+
+
+@app.middleware("http")
+async def add_request_observability(request: Request, call_next):
+    """Attach a traceable request ID and emit a compact completion log."""
+
+    request_id = request_id_for(request)
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "请求处理失败：request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path,
+        )
+        raise
+
+    response.headers["X-Request-ID"] = request_id
+    if request.url.path in QUIET_REQUEST_PATHS:
+        response.headers["Cache-Control"] = "no-store"
+    if request.url.path not in QUIET_REQUEST_PATHS:
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        logger.info(
+            "请求完成：request_id=%s method=%s path=%s status=%s duration_ms=%.1f",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+    return response
+
 # ---------------------------------------------------------------------------
 # CORS 跨域配置
 # ---------------------------------------------------------------------------
@@ -263,15 +317,40 @@ app.include_router(router)
 # 健康检查端点
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 def health() -> dict[str, str]:
     """
     健康检查端点。
 
-    Docker Compose 使用此端点判断后端服务是否就绪：
-        backend 容器: healthcheck → GET /health
-        frontend 容器: depends_on → backend 健康检查通过后才启动
+    保留此端点供现有外部探针兼容使用。Docker Compose 的 backend
+    healthcheck 使用 /readyz；frontend 则只检查自己的静态页面。
 
     返回简单的 {"status": "ok"}，不依赖数据库（最轻量的检查）。
     """
     return {"status": "ok"}
+
+
+@app.get("/livez", include_in_schema=False)
+def liveness() -> dict[str, str]:
+    """Process liveness probe; intentionally does not contact dependencies."""
+
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False, response_model=None)
+def readiness():
+    """Readiness probe that verifies the core database can answer a query."""
+
+    try:
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1")).scalar_one()
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "就绪检查失败：database=unavailable error_type=%s",
+            type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "database": "unavailable"},
+        )
+    return {"status": "ok", "database": "ok"}
