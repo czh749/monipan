@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { gsap } from 'gsap'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Account, MarketStatus, OrderPreview, Position, Stock } from '../types'
 import { formatNumber, fullDateTime, quoteNumber, relativeTime, riseClass, shortDateTime } from '../utils/formatters'
 
@@ -26,6 +27,9 @@ const emit = defineEmits<{
   submit: []
 }>()
 
+const ticketRoot = ref<HTMLElement | null>(null)
+let ticketMotion: ReturnType<typeof gsap.matchMedia> | null = null
+
 const estimatedAmount = computed(() => Number(props.preview?.estimated_amount ?? 0))
 const priceRangePosition = computed(() => {
   if (!props.stock) return 50
@@ -45,11 +49,40 @@ function chooseOrderType(type: 'MARKET' | 'LIMIT') {
   emit('update:orderType', type)
   if (type === 'LIMIT' && props.stock) emit('update:limitPrice', Number(props.stock.price))
 }
+
+async function animateTicketLoad() {
+  await nextTick()
+  ticketMotion?.revert()
+  ticketMotion = null
+
+  const root = ticketRoot.value
+  if (!root || !props.stock) return
+
+  ticketMotion = gsap.matchMedia()
+  ticketMotion.add('(prefers-reduced-motion: no-preference)', () => {
+    const timeline = gsap.timeline({ defaults: { ease: 'power2.out' } })
+    timeline
+      .set('.ticket-signal-rail', { autoAlpha: 1, scaleY: 0, transformOrigin: 'top center' })
+      .to('.ticket-signal-rail', { scaleY: 1, duration: 0.24 })
+      .fromTo(
+        '.stock-head, .quote-provenance, .quote-strip, .day-range',
+        { autoAlpha: 0.45, x: 8 },
+        { autoAlpha: 1, x: 0, duration: 0.2, stagger: 0.025, clearProps: 'transform,opacity,visibility' },
+        0.035,
+      )
+      .to('.ticket-signal-rail', { autoAlpha: 0, duration: 0.16 }, 0.18)
+  }, root)
+}
+
+watch(() => props.stock?.symbol, () => void animateTicketLoad())
+onMounted(() => void animateTicketLoad())
+onBeforeUnmount(() => ticketMotion?.revert())
 </script>
 
 <template>
-  <aside class="panel order-panel">
+  <aside ref="ticketRoot" class="panel order-panel">
     <template v-if="stock">
+      <span class="ticket-signal-rail" aria-hidden="true"><i></i></span>
       <div class="ticket-label"><span>ORDER TICKET</span><strong>{{ orderType === 'MARKET' ? '市价委托' : '限价委托' }}</strong></div>
       <div class="stock-head">
         <div><span>{{ stock.symbol }}</span><h2>{{ stock.name }}</h2><small>{{ stock.industry }}</small></div>

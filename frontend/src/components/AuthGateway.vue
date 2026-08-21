@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
 import type { AuthRequest } from '../types'
 
 const props = defineProps<{
@@ -12,6 +13,9 @@ const emit = defineEmits<{
 }>()
 
 const mode = ref<'login' | 'register'>('login')
+const gatewayRoot = ref<HTMLElement | null>(null)
+const sceneImage = ref<HTMLElement | null>(null)
+const sceneGlow = ref<HTMLElement | null>(null)
 const username = ref('')
 const password = ref('')
 const confirmation = ref('')
@@ -19,12 +23,74 @@ const inviteCode = ref('')
 const localError = ref('')
 const title = computed(() => mode.value === 'login' ? '进入交易席位' : '创建模拟账户')
 const actionLabel = computed(() => mode.value === 'login' ? '登录交易席位' : '创建并进入')
+let motionMedia: ReturnType<typeof gsap.matchMedia> | undefined
+let modeTween: gsap.core.Tween | undefined
 
-watch(mode, () => {
+watch(mode, async () => {
   localError.value = ''
   password.value = ''
   confirmation.value = ''
   inviteCode.value = ''
+
+  await nextTick()
+  const fields = gatewayRoot.value?.querySelectorAll('.auth-form label')
+  if (!fields?.length || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  modeTween?.kill()
+  modeTween = gsap.fromTo(
+    fields,
+    { autoAlpha: 0, y: 10 },
+    { autoAlpha: 1, y: 0, duration: .32, stagger: .045, ease: 'power2.out', clearProps: 'all' },
+  )
+})
+
+onMounted(() => {
+  if (!gatewayRoot.value) return
+  motionMedia = gsap.matchMedia()
+  motionMedia.add(
+    {
+      desktop: '(min-width: 681px)',
+      reduceMotion: '(prefers-reduced-motion: reduce)',
+    },
+    (context) => {
+      const { desktop, reduceMotion } = context.conditions as { desktop: boolean; reduceMotion: boolean }
+      if (reduceMotion) {
+        gsap.set(['.auth-market-context > *', '.auth-pass', '.auth-live-rail'], { autoAlpha: 1, clearProps: 'transform' })
+        return
+      }
+
+      const entrance = gsap.timeline({ defaults: { ease: 'power3.out' } })
+      entrance
+        .fromTo(sceneImage.value, { scale: 1.09 }, { scale: 1.035, duration: 1.8 }, 0)
+        .fromTo('.auth-live-rail', { autoAlpha: 0, scaleX: .7 }, { autoAlpha: 1, scaleX: 1, duration: .75 }, .18)
+        .fromTo('.auth-market-context > *', { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .7, stagger: .08 }, .28)
+        .fromTo('.auth-pass', { autoAlpha: 0, x: desktop ? 48 : 0, y: desktop ? 0 : 24 }, { autoAlpha: 1, x: 0, y: 0, duration: .82 }, .44)
+
+      if (!desktop || !sceneImage.value || !sceneGlow.value || !gatewayRoot.value) return
+      const imageX = gsap.quickTo(sceneImage.value, 'x', { duration: 1.1, ease: 'power3.out' })
+      const imageY = gsap.quickTo(sceneImage.value, 'y', { duration: 1.1, ease: 'power3.out' })
+      const glowX = gsap.quickTo(sceneGlow.value, 'x', { duration: .7, ease: 'power3.out' })
+      const glowY = gsap.quickTo(sceneGlow.value, 'y', { duration: .7, ease: 'power3.out' })
+      const root = gatewayRoot.value
+
+      const moveScene = (event: PointerEvent) => {
+        const xRatio = event.clientX / Math.max(window.innerWidth, 1) - .5
+        const yRatio = event.clientY / Math.max(window.innerHeight, 1) - .5
+        imageX(xRatio * -18)
+        imageY(yRatio * -12)
+        glowX(event.clientX - root.clientWidth * .5)
+        glowY(event.clientY - root.clientHeight * .5)
+      }
+
+      root.addEventListener('pointermove', moveScene, { passive: true })
+      return () => root.removeEventListener('pointermove', moveScene)
+    },
+    gatewayRoot.value,
+  )
+})
+
+onUnmounted(() => {
+  modeTween?.kill()
+  motionMedia?.revert()
 })
 
 function submit() {
@@ -42,11 +108,23 @@ function submit() {
 </script>
 
 <template>
-  <section class="auth-gateway" aria-labelledby="auth-title">
+  <section ref="gatewayRoot" class="auth-gateway" aria-labelledby="auth-title">
+    <div class="auth-scene" aria-hidden="true">
+      <div ref="sceneImage" class="auth-scene-image"></div>
+      <div class="auth-scene-grid"></div>
+      <div ref="sceneGlow" class="auth-scene-glow"></div>
+      <div class="auth-scene-vignette"></div>
+      <div class="auth-live-rail">
+        <i></i>
+        <span>MARKET PRACTICE ENVIRONMENT</span>
+        <b>SIMULATION ONLINE</b>
+      </div>
+    </div>
+
     <div class="auth-market-context" aria-hidden="true">
       <span class="section-kicker">SECURE MARKET ACCESS</span>
-      <strong>个人模拟交易席位</strong>
-      <p>独立资金、持仓、自选与委托记录，只属于当前登录账户。</p>
+      <strong>把每一次判断，<br>放进真实行情验证。</strong>
+      <p>进入你的个人模拟交易席位，在公开行情环境中练习选股、委托与复盘。</p>
       <div class="auth-ledger">
         <div><span>初始资金</span><b>¥ 1,000,000</b></div>
         <div><span>交易市场</span><b>A 股模拟盘</b></div>

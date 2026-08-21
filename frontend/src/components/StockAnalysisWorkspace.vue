@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '../api'
 import type {
   AgentAction,
@@ -25,7 +26,10 @@ const run = ref<AgentRun | null>(null)
 const loading = ref(false)
 const error = ref('')
 const failedRunId = ref<number | null>(null)
+const researchRoot = ref<HTMLElement | null>(null)
 let requestId = 0
+let pageMotion: ReturnType<typeof gsap.matchMedia> | null = null
+let stateMotion: ReturnType<typeof gsap.matchMedia> | null = null
 
 const analysisTools = [
   ['get_portfolio', '当前模拟持仓'],
@@ -134,25 +138,132 @@ function resetWorkspace() {
   requestId += 1
 }
 
+async function animateWorkspaceOpen() {
+  await nextTick()
+  pageMotion?.revert()
+  pageMotion = null
+
+  const root = researchRoot.value
+  if (!root) return
+
+  pageMotion = gsap.matchMedia()
+  pageMotion.add('(prefers-reduced-motion: no-preference)', () => {
+    const timeline = gsap.timeline({ defaults: { ease: 'power2.out' } })
+    timeline
+      .fromTo(
+        '.research-page-header > *',
+        { autoAlpha: 0, y: -5 },
+        { autoAlpha: 1, y: 0, duration: 0.2, stagger: 0.035, clearProps: 'transform,opacity,visibility' },
+      )
+      .fromTo(
+        '.research-brief-copy > *',
+        { autoAlpha: 0, y: 9 },
+        { autoAlpha: 1, y: 0, duration: 0.22, stagger: 0.035, clearProps: 'transform,opacity,visibility' },
+        0.035,
+      )
+      .fromTo(
+        '.research-context-grid > div',
+        { autoAlpha: 0, y: 8 },
+        { autoAlpha: 1, y: 0, duration: 0.2, stagger: 0.03, clearProps: 'transform,opacity,visibility' },
+        0.08,
+      )
+      .fromTo(
+        '.research-analysis-stage',
+        { autoAlpha: 0, y: 10 },
+        { autoAlpha: 1, y: 0, duration: 0.24, clearProps: 'transform,opacity,visibility' },
+        0.13,
+      )
+  }, root)
+}
+
+async function animateResearchState() {
+  await nextTick()
+  stateMotion?.revert()
+  stateMotion = null
+
+  const root = researchRoot.value
+  if (!root) return
+
+  stateMotion = gsap.matchMedia()
+  stateMotion.add('(prefers-reduced-motion: no-preference)', () => {
+    const timeline = gsap.timeline({ defaults: { ease: 'power2.out' } })
+
+    if (loading.value) {
+      timeline
+        .fromTo('.ai-scan-line', { autoAlpha: 0, x: -7 }, { autoAlpha: 1, x: 0, duration: 0.2 })
+        .fromTo(
+          '.ai-tool-rail li',
+          { autoAlpha: 0, y: 5 },
+          { autoAlpha: 1, y: 0, duration: 0.16, stagger: 0.025 },
+          0.045,
+        )
+      gsap.fromTo(
+        '.ai-evidence-scan i',
+        { xPercent: -110 },
+        { xPercent: 110, duration: 1.1, ease: 'none', repeat: -1 },
+      )
+      return
+    }
+
+    if (error.value) {
+      timeline.fromTo('.ai-analysis-error > *', { autoAlpha: 0, y: 5 }, { autoAlpha: 1, y: 0, duration: 0.18, stagger: 0.03 })
+      return
+    }
+
+    if (run.value && recommendation.value) {
+      const evidenceRows = Array.from(root.querySelectorAll<HTMLElement>('.ai-evidence-spine article')).slice(0, 12)
+      timeline
+        .fromTo('.ai-risk-strip > div', { autoAlpha: 0, y: 6 }, { autoAlpha: 1, y: 0, duration: 0.18, stagger: 0.03 })
+        .fromTo('.ai-research-memo', { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.2 }, 0.06)
+        .fromTo(
+          '.ai-factor-grid > section, .ai-condition-matrix > section',
+          { autoAlpha: 0, y: 8 },
+          { autoAlpha: 1, y: 0, duration: 0.2, stagger: 0.035 },
+          0.1,
+        )
+      if (evidenceRows.length) {
+        timeline.fromTo(evidenceRows, { autoAlpha: 0, x: -7 }, { autoAlpha: 1, x: 0, duration: 0.18, stagger: 0.025 }, 0.16)
+      }
+      return
+    }
+
+    timeline.fromTo(
+      '.research-question-entry > *',
+      { autoAlpha: 0, y: 6 },
+      { autoAlpha: 1, y: 0, duration: 0.18, stagger: 0.025 },
+    )
+  }, root)
+}
+
 watch(
   [() => props.open, () => props.stock?.symbol] as const,
   ([open, symbol], [previousOpen, previousSymbol]) => {
     if (!open || !symbol) return
-    if (!previousOpen || symbol !== previousSymbol) resetWorkspace()
+    if (!previousOpen || symbol !== previousSymbol) {
+      resetWorkspace()
+      void animateWorkspaceOpen()
+      void animateResearchState()
+    }
   },
 )
+
+watch([loading, () => run.value?.id, error], () => void animateResearchState())
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && props.open) emit('close')
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  pageMotion?.revert()
+  stateMotion?.revert()
+})
 </script>
 
 <template>
   <Transition name="research-page">
-    <section v-if="open && stock" class="research-page" role="dialog" aria-modal="true" :aria-label="`${stock.name} AI 研究工作台`">
+    <section ref="researchRoot" v-if="open && stock" class="research-page" role="dialog" aria-modal="true" :aria-label="`${stock.name} AI 研究工作台`">
       <header class="research-page-header">
         <div class="research-page-nav">
           <button type="button" class="research-back" @click="emit('close')">
@@ -210,6 +321,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                 <small>官方 PDF 仅在需要时临时下载；模型完成前不会显示未经验证的中间结论。</small>
               </div>
             </div>
+            <div class="ai-evidence-scan" aria-hidden="true"><i></i></div>
             <ol class="ai-tool-rail" aria-label="本次分析使用的只读工具">
               <li v-for="([name, label], index) in analysisTools" :key="name">
                 <span>{{ String(index + 1).padStart(2, '0') }}</span>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AuthGateway from './components/AuthGateway.vue'
 import MarketMatrix from './components/MarketMatrix.vue'
 import OrderConfirmation from './components/OrderConfirmation.vue'
@@ -23,6 +24,7 @@ import {
 } from './utils/formatters'
 
 type TradingTab = 'positions' | 'orders' | 'trades'
+type AppView = 'trading' | 'account'
 
 interface OrderNotice {
   kind: 'success' | 'error'
@@ -49,6 +51,7 @@ const {
   submitting,
   error: tradingError,
   initializeTrading,
+  refreshPortfolio,
   refreshHistory,
   placeOrder,
   cancelOrder,
@@ -70,6 +73,7 @@ const orderType = ref<'MARKET' | 'LIMIT'>('MARKET')
 const limitPrice = ref(0)
 const quantity = ref(100)
 const activeTab = ref<TradingTab>('positions')
+const activeView = ref<AppView>('trading')
 const orderNotice = ref<OrderNotice | null>(null)
 const currentTime = ref(Date.now())
 const orderPreview = ref<OrderPreview | null>(null)
@@ -81,10 +85,16 @@ const currentUser = ref<CurrentUser | null>(null)
 const authChecking = ref(true)
 const authSubmitting = ref(false)
 const authError = ref('')
+const appShellRoot = ref<HTMLElement | null>(null)
+const focusQuoteRoot = ref<HTMLElement | null>(null)
+const tradingBackdrop = ref<HTMLElement | null>(null)
+const tradingGlow = ref<HTMLElement | null>(null)
 let clockTimer: number | undefined
 let orderNoticeTimer: number | undefined
 let previewTimer: number | undefined
 let previewRequestId = 0
+let focusQuoteMotion: ReturnType<typeof gsap.matchMedia> | null = null
+let tradingStageMotion: ReturnType<typeof gsap.matchMedia> | null = null
 
 const error = computed(() => marketError.value || tradingError.value || watchlistError.value)
 const selectedStock = computed(() =>
@@ -160,6 +170,24 @@ function selectStock(stock: Stock) {
   selectedSymbol.value = stock.symbol
 }
 
+async function openPersonalCenter() {
+  if (!currentUser.value) return
+  tradingStageMotion?.revert()
+  tradingStageMotion = null
+  activeView.value = 'account'
+  detailOpen.value = false
+  analysisOpen.value = false
+  confirmationOpen.value = false
+  await Promise.all([refreshPortfolio(), refreshHistory()])
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+async function openTradingDesk() {
+  activeView.value = 'trading'
+  await animateTradingStage()
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 function showStockDetails(stock: Stock) {
   selectedSymbol.value = stock.symbol
   detailOpen.value = true
@@ -184,7 +212,11 @@ function closeStockAnalysis() {
 function chooseForSell(symbol: string) {
   selectedSymbol.value = symbol
   side.value = 'SELL'
-  window.scrollTo({ top: 180, behavior: 'smooth' })
+  activeView.value = 'trading'
+  nextTick(() => {
+    void animateTradingStage()
+    window.scrollTo({ top: 180, behavior: 'smooth' })
+  })
 }
 
 function setActiveTab(tab: TradingTab) {
@@ -307,7 +339,9 @@ async function handleAuthenticate(mode: 'login' | 'register', payload: AuthReque
     currentUser.value = mode === 'login'
       ? await api.login(payload)
       : await api.register(payload)
+    activeView.value = 'trading'
     await initializePrivateWorkspace()
+    await animateTradingStage()
   } catch (reason) {
     authError.value = reason instanceof Error ? reason.message : '认证失败，请稍后重试'
   } finally {
@@ -319,7 +353,10 @@ async function handleLogout() {
   try {
     await api.logout()
   } finally {
+    tradingStageMotion?.revert()
+    tradingStageMotion = null
     currentUser.value = null
+    activeView.value = 'trading'
     authError.value = ''
     resetTrading()
     resetWatchlist()
@@ -329,8 +366,133 @@ async function handleLogout() {
   }
 }
 
+async function animateFocusQuote() {
+  await nextTick()
+  focusQuoteMotion?.revert()
+  focusQuoteMotion = null
+
+  const root = focusQuoteRoot.value
+  if (!root || !selectedStock.value) return
+
+  focusQuoteMotion = gsap.matchMedia()
+  focusQuoteMotion.add('(prefers-reduced-motion: no-preference)', () => {
+    const timeline = gsap.timeline({ defaults: { ease: 'power2.out' } })
+    timeline
+      .fromTo(
+        'strong, b, em, small',
+        { autoAlpha: 0.4, y: 4 },
+        { autoAlpha: 1, y: 0, duration: 0.18, stagger: 0.025, clearProps: 'transform,opacity,visibility' },
+      )
+      .fromTo(
+        '.focus-signal-track i',
+        { scaleX: 0, transformOrigin: 'left center' },
+        { scaleX: 1, duration: 0.24, clearProps: 'transform' },
+        0,
+      )
+  }, root)
+}
+
+async function animateTradingStage() {
+  await nextTick()
+  tradingStageMotion?.revert()
+  tradingStageMotion = null
+
+  const root = appShellRoot.value
+  const backdrop = tradingBackdrop.value
+  const glow = tradingGlow.value
+  if (!root || !backdrop || !glow || !currentUser.value || activeView.value !== 'trading') return
+
+  tradingStageMotion = gsap.matchMedia()
+  tradingStageMotion.add(
+    {
+      desktop: '(min-width: 921px)',
+      compact: '(max-width: 920px)',
+      reduceMotion: '(prefers-reduced-motion: reduce)',
+    },
+    (context) => {
+      const { desktop, reduceMotion } = context.conditions as { desktop: boolean; reduceMotion: boolean }
+      const panels = root.querySelectorAll<HTMLElement>('.market-tape, .index-board-head, .index-node, .workspace > *')
+      const beams = root.querySelectorAll<HTMLElement>('.cockpit-beam')
+
+      if (reduceMotion) {
+        gsap.set([backdrop, ...panels, ...beams], { autoAlpha: 1, clearProps: 'transform' })
+        return
+      }
+
+      const entrance = gsap.timeline({ defaults: { ease: 'power3.out' } })
+      entrance
+        .fromTo(backdrop, { autoAlpha: .35, scale: 1.075 }, { autoAlpha: 1, scale: 1.025, duration: 1.45 }, 0)
+        .fromTo(beams, { autoAlpha: 0, scaleX: 0, transformOrigin: 'left center' }, { autoAlpha: .7, scaleX: 1, duration: .68, stagger: .08 }, .12)
+        .fromTo('.market-tape', { autoAlpha: 0, y: -14 }, { autoAlpha: 1, y: 0, duration: .44, clearProps: 'transform,opacity,visibility' }, .18)
+        .fromTo('.index-board-head', { autoAlpha: 0, y: 16 }, { autoAlpha: 1, y: 0, duration: .48, clearProps: 'transform,opacity,visibility' }, .29)
+        .fromTo('.index-node', { autoAlpha: 0, y: 22, scale: .985 }, { autoAlpha: 1, y: 0, scale: 1, duration: .48, stagger: .055, clearProps: 'transform,opacity,visibility' }, .38)
+        .fromTo('.workspace > *', { autoAlpha: 0, y: 26 }, { autoAlpha: 1, y: 0, duration: .58, stagger: .1, clearProps: 'transform,opacity,visibility' }, .54)
+
+      if (!desktop) return
+      const backdropX = gsap.quickTo(backdrop, 'x', { duration: 1.15, ease: 'power3.out' })
+      const backdropY = gsap.quickTo(backdrop, 'y', { duration: 1.15, ease: 'power3.out' })
+      const glowX = gsap.quickTo(glow, 'x', { duration: .72, ease: 'power3.out' })
+      const glowY = gsap.quickTo(glow, 'y', { duration: .72, ease: 'power3.out' })
+
+      const moveStage = (event: PointerEvent) => {
+        const xRatio = event.clientX / Math.max(window.innerWidth, 1) - .5
+        const yRatio = event.clientY / Math.max(window.innerHeight, 1) - .5
+        backdropX(xRatio * -16)
+        backdropY(yRatio * -10)
+        glowX(event.clientX - window.innerWidth * .5)
+        glowY(event.clientY - window.innerHeight * .5)
+      }
+
+      window.addEventListener('pointermove', moveStage, { passive: true })
+      return () => window.removeEventListener('pointermove', moveStage)
+    },
+    root,
+  )
+}
+
+function enterOrderNotice(element: Element, done: () => void) {
+  const target = element as HTMLElement
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const parts = target.querySelectorAll<HTMLElement>('.order-notice-mark, .order-notice-copy, button')
+  const signal = target.querySelector<HTMLElement>('.order-notice-scan')
+  gsap.killTweensOf([target, ...parts, signal].filter(Boolean))
+
+  if (reducedMotion) {
+    gsap.set(target, { autoAlpha: 1 })
+    done()
+    return
+  }
+
+  gsap.timeline({
+    defaults: { ease: 'power2.out' },
+    onComplete: () => {
+      gsap.set(target, { clearProps: 'transform,opacity,visibility' })
+      done()
+    },
+  })
+    .fromTo(target, { autoAlpha: 0, y: -10 }, { autoAlpha: 1, y: 0, duration: 0.18 })
+    .fromTo(parts, { autoAlpha: 0, x: 6 }, { autoAlpha: 1, x: 0, duration: 0.16, stagger: 0.025 }, 0.045)
+    .fromTo(signal, { scaleX: 0, transformOrigin: 'left center' }, { scaleX: 1, duration: 0.28 }, 0)
+}
+
+function leaveOrderNotice(element: Element, done: () => void) {
+  const target = element as HTMLElement
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  gsap.killTweensOf(target)
+  gsap.to(target, {
+    autoAlpha: 0,
+    y: reducedMotion ? 0 : -6,
+    duration: reducedMotion ? 0 : 0.14,
+    ease: 'power1.in',
+    onComplete: done,
+  })
+}
+
 watch(selectedStock, (stock, previous) => {
-  if (stock && stock.symbol !== previous?.symbol) limitPrice.value = Number(stock.price)
+  if (stock && stock.symbol !== previous?.symbol) {
+    limitPrice.value = Number(stock.price)
+    void animateFocusQuote()
+  }
 }, { immediate: true })
 
 watch([selectedSymbol, side, quantity, orderType, limitPrice, account, positions, orders], () => {
@@ -339,7 +501,7 @@ watch([selectedSymbol, side, quantity, orderType, limitPrice, account, positions
 })
 
 onMounted(async () => {
-  void startMarketPolling()
+  const marketReady = startMarketPolling()
   try {
     currentUser.value = await api.currentUser()
     await initializePrivateWorkspace()
@@ -348,6 +510,8 @@ onMounted(async () => {
   } finally {
     authChecking.value = false
   }
+  await marketReady
+  await animateTradingStage()
   clockTimer = window.setInterval(() => (currentTime.value = Date.now()), 1000)
 })
 
@@ -356,11 +520,17 @@ onBeforeUnmount(() => {
   window.clearInterval(clockTimer)
   window.clearTimeout(orderNoticeTimer)
   window.clearTimeout(previewTimer)
+  focusQuoteMotion?.revert()
+  tradingStageMotion?.revert()
 })
 </script>
 
 <template>
-  <div class="app-shell">
+  <div
+    ref="appShellRoot"
+    class="app-shell"
+    :class="{ 'trading-scene-active': currentUser && activeView === 'trading' }"
+  >
     <header class="topbar">
       <div class="brand">
         <div class="logo">MP</div>
@@ -371,7 +541,10 @@ onBeforeUnmount(() => {
       </div>
       <div class="desk-context">
         <span class="context-index">01</span>
-        <div><strong>交易驾驶舱</strong><small>MARKET OPERATIONS</small></div>
+        <div>
+          <strong>{{ activeView === 'account' && currentUser ? '个人中心' : '交易驾驶舱' }}</strong>
+          <small>{{ activeView === 'account' && currentUser ? 'ACCOUNT LEDGER' : 'MARKET OPERATIONS' }}</small>
+        </div>
       </div>
       <div class="market-status" :class="marketStatusClass">
         <span class="status-dot"></span>
@@ -381,14 +554,40 @@ onBeforeUnmount(() => {
         </span>
       </div>
       <div class="user-chip" :class="{ anonymous: !currentUser }">
-        <span class="avatar">{{ currentUser?.username.slice(0, 1).toUpperCase() ?? '访' }}</span>
-        <div>
-          <strong>{{ currentUser?.username ?? '访客模式' }}</strong>
-          <small>{{ currentUser ? `初始资金 ¥${Number(currentUser.initial_cash).toLocaleString('zh-CN')}` : '请登录交易席位' }}</small>
-        </div>
+        <button
+          v-if="currentUser"
+          type="button"
+          class="user-center-button"
+          :class="{ active: activeView === 'account' }"
+          :aria-current="activeView === 'account' ? 'page' : undefined"
+          @click="openPersonalCenter"
+        >
+          <span class="avatar">{{ currentUser.username.slice(0, 1).toUpperCase() }}</span>
+          <span class="user-center-copy">
+            <strong>个人中心</strong>
+            <small>{{ currentUser.username }} · 持仓与记录</small>
+          </span>
+        </button>
+        <template v-else>
+          <span class="avatar">访</span>
+          <span class="user-center-copy">
+            <strong>访客模式</strong>
+            <small>请登录交易席位</small>
+          </span>
+        </template>
         <button v-if="currentUser" class="logout-button" type="button" @click="handleLogout">退出</button>
       </div>
     </header>
+
+    <div v-if="currentUser && activeView === 'trading'" class="trading-atmosphere" aria-hidden="true">
+      <div ref="tradingBackdrop" class="trading-atmosphere-image"></div>
+      <div class="trading-atmosphere-grid"></div>
+      <div ref="tradingGlow" class="trading-atmosphere-glow"></div>
+      <div class="trading-atmosphere-vignette"></div>
+      <i class="cockpit-beam cockpit-beam-a"></i>
+      <i class="cockpit-beam cockpit-beam-b"></i>
+      <i class="cockpit-beam cockpit-beam-c"></i>
+    </div>
 
     <main v-if="authChecking" class="auth-loading-shell" aria-live="polite">
       <span class="auth-loading-mark">MP</span>
@@ -403,8 +602,28 @@ onBeforeUnmount(() => {
       />
     </main>
 
-    <main v-else>
-      <section v-if="selectedStock" class="market-tape" :class="marketStatusClass" aria-label="行情可信度">
+    <main v-else :class="{ 'account-center-main': activeView === 'account' }">
+      <section v-if="activeView === 'account'" class="account-center-head">
+        <div class="account-center-identity">
+          <span class="account-avatar">{{ currentUser.username.slice(0, 1).toUpperCase() }}</span>
+          <div>
+            <span class="section-kicker">PERSONAL ACCOUNT CENTER</span>
+            <h1>{{ currentUser.username }} 的账户账簿</h1>
+            <p>集中查看资金分布、当前持仓与全部模拟交易流水。</p>
+          </div>
+        </div>
+        <button type="button" class="account-return" @click="openTradingDesk">
+          <span aria-hidden="true">←</span>
+          返回交易驾驶舱
+        </button>
+        <div class="account-signal-track" aria-hidden="true">
+          <span>CAPITAL</span>
+          <i><b :style="{ width: `${positionRatio}%` }"></b></i>
+          <span>LEDGER</span>
+        </div>
+      </section>
+
+      <section v-if="activeView === 'trading' && selectedStock" class="market-tape" :class="marketStatusClass" aria-label="行情可信度">
         <div class="feed-health">
           <div class="feed-health-main">
             <span class="status-dot"></span>
@@ -419,7 +638,8 @@ onBeforeUnmount(() => {
               : '读取批次状态…' }}
           </small>
         </div>
-        <div class="focus-quote">
+        <div ref="focusQuoteRoot" class="focus-quote">
+          <span class="focus-signal-track" aria-hidden="true"><i></i></span>
           <span>焦点标的</span>
           <strong>{{ selectedStock.symbol }}</strong>
           <b>{{ selectedStock.name }}</b>
@@ -457,7 +677,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-if="marketIndices.length" class="index-board" aria-label="A股大盘数据">
+      <section v-if="activeView === 'trading' && marketIndices.length" class="index-board" aria-label="A股大盘数据">
         <div class="index-board-head">
           <div class="index-board-title">
             <span class="section-kicker">MARKET PULSE</span>
@@ -504,7 +724,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-if="account" class="asset-cockpit">
+      <section v-if="activeView === 'account' && account" class="asset-cockpit account-asset-cockpit">
         <article class="equity-console">
           <div class="console-heading">
             <div><span class="section-kicker">TOTAL EQUITY</span><h2>账户净值</h2></div>
@@ -556,7 +776,7 @@ onBeforeUnmount(() => {
         </article>
       </section>
 
-      <section v-if="account" class="mobile-capital">
+      <section v-if="activeView === 'account' && account" class="mobile-capital">
         <article>
           <span class="card-label">可用资金</span>
             <strong>¥ {{ formatNumber(account.available_cash) }}</strong>
@@ -567,7 +787,7 @@ onBeforeUnmount(() => {
         </article>
       </section>
 
-      <div v-if="marketWarning" class="market-data-alert" :class="marketStatusClass">
+      <div v-if="activeView === 'trading' && marketWarning" class="market-data-alert" :class="marketStatusClass">
         <span class="market-alert-icon">!</span>
         <div>
           <strong>{{ marketStatus?.status_label }}</strong>
@@ -577,7 +797,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="error" class="alert"><span>!</span>{{ error }}<button @click="clearError">×</button></div>
-      <Transition name="order-notice">
+      <Transition :css="false" @enter="enterOrderNotice" @leave="leaveOrderNotice">
         <aside
           v-if="orderNotice"
           class="order-notice"
@@ -585,6 +805,7 @@ onBeforeUnmount(() => {
           :role="orderNotice.kind === 'error' ? 'alert' : 'status'"
           aria-live="polite"
         >
+          <span class="order-notice-scan" aria-hidden="true"></span>
           <span class="order-notice-mark" aria-hidden="true">
             {{ orderNotice.kind === 'success' ? '✓' : '!' }}
           </span>
@@ -600,7 +821,7 @@ onBeforeUnmount(() => {
         </aside>
       </Transition>
 
-      <section class="workspace">
+      <section v-if="activeView === 'trading'" class="workspace">
         <MarketMatrix
           :stocks="stocks"
           :selected-symbol="selectedSymbol"
@@ -630,6 +851,7 @@ onBeforeUnmount(() => {
       </section>
 
       <TradingRecords
+        v-if="activeView === 'account'"
         :positions="positions"
         :orders="orders"
         :trades="trades"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { gsap } from 'gsap'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Stock } from '../types'
 import { compactVolume, formatNumber, quoteNumber, riseClass } from '../utils/formatters'
 
@@ -26,6 +27,8 @@ const view = ref<MarketView>('all')
 const industry = ref('')
 const sortKey = ref<SortKey>('symbol')
 const sortDirection = ref<'asc' | 'desc'>('asc')
+const matrixRoot = ref<HTMLElement | null>(null)
+let selectionMotion: ReturnType<typeof gsap.matchMedia> | null = null
 
 const watchlist = computed(() => new Set(props.watchlistSymbols))
 const positions = computed(() => new Set(props.positionSymbols))
@@ -64,10 +67,38 @@ function setSort(key: SortKey) {
 function sortMark(key: SortKey) {
   return sortKey.value === key ? (sortDirection.value === 'asc' ? '↑' : '↓') : ''
 }
+
+async function animateSelectionSignal() {
+  await nextTick()
+  selectionMotion?.revert()
+  selectionMotion = null
+
+  const root = matrixRoot.value
+  const selectedRow = root?.querySelector<HTMLElement>('tbody tr.selected')
+  if (!root || !selectedRow) return
+
+  selectionMotion = gsap.matchMedia()
+  selectionMotion.add('(prefers-reduced-motion: no-preference)', () => {
+    const primaryCells = selectedRow.querySelectorAll<HTMLElement>('td:nth-child(2), td:nth-child(3), td:nth-child(4)')
+    const timeline = gsap.timeline({ defaults: { ease: 'power2.out' } })
+    timeline
+      .fromTo(selectedRow, { x: -4 }, { x: 0, duration: 0.2, clearProps: 'transform' })
+      .fromTo(
+        primaryCells,
+        { autoAlpha: 0.5, y: 3 },
+        { autoAlpha: 1, y: 0, duration: 0.18, stagger: 0.025, clearProps: 'transform,opacity,visibility' },
+        0,
+      )
+  }, root)
+}
+
+watch(() => props.selectedSymbol, () => void animateSelectionSignal())
+onMounted(() => void animateSelectionSignal())
+onBeforeUnmount(() => selectionMotion?.revert())
 </script>
 
 <template>
-  <article class="panel market-panel">
+  <article ref="matrixRoot" class="panel market-panel">
     <div class="panel-header market-panel-header">
       <div>
         <span class="section-kicker">MARKET SCANNER</span>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import type {
   CompanyAnnouncement,
@@ -46,6 +47,7 @@ const announcementsError = ref('')
 const regulatoryError = ref('')
 const announcementRange = ref<AnnouncementRange>(90)
 const announcementLimit = ref(20)
+const drawerRoot = ref<HTMLElement | null>(null)
 const announcementRanges: { value: AnnouncementRange; label: string }[] = [
   { value: 30, label: '30天' },
   { value: 90, label: '90天' },
@@ -53,6 +55,7 @@ const announcementRanges: { value: AnnouncementRange; label: string }[] = [
 ]
 let fundamentalsRequestId = 0
 let announcementsRequestId = 0
+let drawerMotion: ReturnType<typeof gsap.matchMedia> | null = null
 
 interface RenderedStockBar extends StockBar {
   x: number
@@ -639,6 +642,38 @@ function selectTab(tab: DrawerTab) {
   }
 }
 
+async function animateDrawerSequence() {
+  await nextTick()
+  drawerMotion?.revert()
+  drawerMotion = null
+
+  const root = drawerRoot.value
+  if (!root) return
+
+  drawerMotion = gsap.matchMedia()
+  drawerMotion.add('(prefers-reduced-motion: no-preference)', () => {
+    const timeline = gsap.timeline({ defaults: { ease: 'power2.out' } })
+    timeline
+      .fromTo(
+        '.drawer-header > div:first-child, .drawer-header-actions',
+        { autoAlpha: 0, x: 10 },
+        { autoAlpha: 1, x: 0, duration: 0.2, stagger: 0.035, clearProps: 'transform,opacity,visibility' },
+      )
+      .fromTo(
+        '.drawer-quote > div, .drawer-quote dl > div',
+        { autoAlpha: 0, y: 6 },
+        { autoAlpha: 1, y: 0, duration: 0.18, stagger: 0.025, clearProps: 'transform,opacity,visibility' },
+        0.035,
+      )
+      .fromTo(
+        '.earnings-pulse, .drawer-tabs, .kline-stage',
+        { autoAlpha: 0, y: 7 },
+        { autoAlpha: 1, y: 0, duration: 0.2, stagger: 0.04, clearProps: 'transform,opacity,visibility' },
+        0.1,
+      )
+  }, root)
+}
+
 watch(
   [() => props.open, () => props.stock?.symbol] as const,
   ([open, symbol], [previousOpen, previousSymbol]) => {
@@ -664,6 +699,7 @@ watch(
     announcementsRequestId += 1
     void loadHistory(symbol)
     void loadFundamentals(symbol)
+    void animateDrawerSequence()
   },
 )
 
@@ -672,13 +708,16 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  drawerMotion?.revert()
+})
 </script>
 
 <template>
   <Transition name="drawer">
     <div v-if="open && stock" class="drawer-layer" @click.self="emit('close')">
-      <aside class="stock-drawer" role="dialog" aria-modal="true" :aria-label="`${stock.name}详情`">
+      <aside ref="drawerRoot" class="stock-drawer" role="dialog" aria-modal="true" :aria-label="`${stock.name}详情`">
         <header class="drawer-header">
           <div>
             <span class="section-kicker">MARKET / FINANCIALS / DISCLOSURES</span>
