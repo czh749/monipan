@@ -66,6 +66,7 @@ class StockOut(BaseModel):
     volume: int
     change: Decimal
     change_percent: Decimal
+    quote_source_at: datetime | None
     updated_at: datetime
 
 
@@ -307,6 +308,7 @@ class OrderPreviewOut(BaseModel):
     upper_limit: Decimal
     lower_limit: Decimal
     quote_updated_at: datetime
+    quote_source_at: datetime | None
     allowed: bool
     blocking_reason: str | None
     warnings: list[str]
@@ -321,6 +323,9 @@ class OrderOut(BaseModel):
     side: str
     order_type: str
     limit_price: Decimal | None
+    submitted_quote_price: Decimal | None
+    submitted_quote_at: datetime | None
+    filled_quote_at: datetime | None
     quantity: int
     filled_quantity: int
     price: Decimal
@@ -350,6 +355,8 @@ class AccountOut(BaseModel):
     market_value: Decimal
     total_assets: Decimal
     total_profit_loss: Decimal
+    realized_profit_loss: Decimal
+    floating_profit_loss: Decimal
     total_return_percent: Decimal
 
 
@@ -363,7 +370,77 @@ class TradeOut(BaseModel):
     price: Decimal
     amount: Decimal
     fee: Decimal
+    filled_quote_at: datetime | None
     created_at: datetime
+
+
+class ReviewPositionOut(BaseModel):
+    symbol: str
+    stock_name: str
+    quantity: int
+    cost_basis: Decimal
+    price: Decimal | None
+    price_date: date | None
+    price_source: Literal["SNAPSHOT", "HISTORY"] | None
+    market_value: Decimal | None
+    floating_pnl: Decimal | None
+
+
+class DailySnapshotOut(BaseModel):
+    date: date
+    cash: Decimal
+    market_value: Decimal | None
+    total_assets: Decimal | None
+    cost_basis: Decimal
+    realized_pnl: Decimal
+    floating_pnl: Decimal | None
+    cash_change: Decimal
+    market_value_change: Decimal | None
+    asset_change: Decimal | None
+    asset_change_delta: Decimal | None
+    trade_count: int
+    trade_cash_flow: Decimal
+    fees: Decimal
+    ledger_cash_delta: Decimal
+    ledger_consistent: bool
+    reconciliation_delta: Decimal | None
+    valuation_status: Literal["COMPLETE", "CARRIED", "PROVISIONAL", "MISSING"]
+    missing_symbols: list[str]
+    positions: list[ReviewPositionOut]
+    calculated_at: datetime
+
+
+class ReviewTradeOut(BaseModel):
+    trade_no: str
+    symbol: str
+    stock_name: str
+    side: Literal["BUY", "SELL"]
+    quantity: int
+    price: Decimal
+    amount: Decimal
+    fee: Decimal
+    cash_flow: Decimal
+    created_at: datetime
+    note: str | None
+
+
+class DayReviewOut(BaseModel):
+    snapshot: DailySnapshotOut
+    trades: list[ReviewTradeOut]
+    daily_note: str | None
+
+
+class ReviewNoteIn(BaseModel):
+    content: str = Field(max_length=2000)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        return value.strip()
+
+
+class ReviewNoteOut(BaseModel):
+    content: str | None
 
 
 class StockAnalysisCreate(BaseModel):

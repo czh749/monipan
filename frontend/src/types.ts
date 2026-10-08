@@ -11,6 +11,7 @@ export interface Stock {
   volume: number
   change: string
   change_percent: string
+  quote_source_at: string | null
   updated_at: string
 }
 
@@ -82,6 +83,8 @@ export interface Account {
   market_value: string
   total_assets: string
   total_profit_loss: string
+  realized_profit_loss: string
+  floating_profit_loss: string
   total_return_percent: string
 }
 
@@ -104,6 +107,9 @@ export interface Order {
   side: 'BUY' | 'SELL'
   order_type: string
   limit_price: string | null
+  submitted_quote_price: string | null
+  submitted_quote_at: string | null
+  filled_quote_at: string | null
   quantity: number
   filled_quantity: number
   price: string
@@ -124,7 +130,64 @@ export interface Trade {
   price: string
   amount: string
   fee: string
+  filled_quote_at: string | null
   created_at: string
+}
+
+export interface ReviewPosition {
+  symbol: string
+  stock_name: string
+  quantity: number
+  cost_basis: string
+  price: string | null
+  price_date: string | null
+  price_source: 'SNAPSHOT' | 'HISTORY' | null
+  market_value: string | null
+  floating_pnl: string | null
+}
+
+export interface DailySnapshot {
+  date: string
+  cash: string
+  market_value: string | null
+  total_assets: string | null
+  cost_basis: string
+  realized_pnl: string
+  floating_pnl: string | null
+  cash_change: string
+  market_value_change: string | null
+  asset_change: string | null
+  asset_change_delta: string | null
+  trade_count: number
+  trade_cash_flow: string
+  fees: string
+  ledger_cash_delta: string
+  ledger_consistent: boolean
+  reconciliation_delta: string | null
+  valuation_status: 'COMPLETE' | 'CARRIED' | 'PROVISIONAL' | 'MISSING'
+  missing_symbols: string[]
+  positions: ReviewPosition[]
+  calculated_at: string
+}
+
+export interface ReviewTrade {
+  trade_no: string
+  symbol: string
+  stock_name: string
+  side: 'BUY' | 'SELL'
+  quantity: number
+  price: string
+  amount: string
+  fee: string
+  cash_flow: string
+  created_at: string
+  note: string | null
+}
+
+export interface DayReview {
+  snapshot: DailySnapshot
+  trades: ReviewTrade[]
+  daily_note: string | null
 }
 
 export interface WatchlistItem {
@@ -280,6 +343,7 @@ export interface OrderPreview {
   upper_limit: string
   lower_limit: string
   quote_updated_at: string
+  quote_source_at: string | null
   allowed: boolean
   blocking_reason: string | null
   warnings: string[]

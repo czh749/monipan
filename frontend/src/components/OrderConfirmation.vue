@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OrderPreview, Stock } from '../types'
-import { formatNumber } from '../utils/formatters'
+import { formatNumber, fullDateTime } from '../utils/formatters'
 
 defineProps<{
   stock: Stock
@@ -37,6 +37,8 @@ const emit = defineEmits<{ close: []; confirm: [] }>()
         <div><dt>委托方式</dt><dd>{{ preview.order_type === 'MARKET' ? '市价委托' : `限价 ¥ ${formatNumber(preview.limit_price ?? 0)}` }}</dd></div>
         <div><dt>委托数量</dt><dd>{{ preview.quantity.toLocaleString('zh-CN') }} 股</dd></div>
         <div><dt>行情参考价</dt><dd>¥ {{ formatNumber(preview.reference_price) }}</dd></div>
+        <div><dt>源行情时间</dt><dd>{{ fullDateTime(preview.quote_source_at) }}</dd></div>
+        <div><dt>抓取时间</dt><dd>{{ fullDateTime(preview.quote_updated_at) }}</dd></div>
         <div><dt>预估成交金额</dt><dd>¥ {{ formatNumber(preview.estimated_amount) }}</dd></div>
         <div><dt>费用</dt><dd>¥ {{ formatNumber(preview.estimated_fee) }}</dd></div>
         <div><dt>成交后总仓位</dt><dd>{{ formatNumber(preview.post_position_ratio) }}%</dd></div>
@@ -45,7 +47,7 @@ const emit = defineEmits<{ close: []; confirm: [] }>()
         <strong>提交前提示</strong>
         <span v-for="warning in preview.warnings" :key="warning">{{ warning }}</span>
       </div>
-      <p class="confirm-rule">限价委托不保证立即成交；待成交委托可在“委托记录”中撤销。A 股买入持仓遵循 T+1 可卖规则。</p>
+      <p class="confirm-rule">成交价基于已核验时间的行情快照模拟，不代表真实市场可成交价。限价委托当日有效，未成交可撤销；买入持仓遵循 T+1 可卖规则。</p>
       <footer>
         <button class="dialog-secondary" :disabled="submitting" @click="emit('close')">返回修改</button>
         <button class="dialog-primary" :class="preview.side === 'BUY' ? 'buy-button' : 'sell-button'" :disabled="submitting" @click="emit('confirm')">

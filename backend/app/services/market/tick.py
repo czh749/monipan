@@ -9,6 +9,7 @@ from ...market_index_pool import MARKET_INDEX_POOL
 from ...models import MarketIndex, Stock
 from .constants import logger
 from .history import upsert_latest_stock_bar
+from .raw_close import upsert_quote_raw_close
 from .types import MARKET_REFRESH_STATE
 
 
@@ -113,9 +114,12 @@ def tick_market(db: Session) -> int:
                 stock.name = quote["name"]
             if quote_trade_date is not None:
                 stock.quote_trade_date = quote_trade_date
+            if "quote_source_at" in quote:
+                stock.quote_source_at = quote["quote_source_at"]
             stock.updated_at = quote["updated_at"]
             if quote_trade_date is not None:
                 upsert_latest_stock_bar(db, stock)
+                upsert_quote_raw_close(db, stock)
             updated_count += 1
 
         db.commit()

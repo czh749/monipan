@@ -43,5 +43,6 @@ def stock_values(stock: Stock) -> dict:
         "volume": stock.volume,
         "change": change,
         "change_percent": percent,
+        "quote_source_at": stock.quote_source_at,
         "updated_at": stock.updated_at,
     }

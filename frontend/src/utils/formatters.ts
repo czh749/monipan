@@ -31,7 +31,7 @@ export function utcDate(value: string | null | undefined) {
   return new Date(hasTimeZone ? value : `${value}Z`)
 }
 
-export function dateTime(value: string) {
+export function dateTime(value: string | null | undefined) {
   const date = utcDate(value)
   if (!date) return '—'
   return date.toLocaleString('zh-CN', {

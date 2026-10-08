@@ -24,6 +24,7 @@ RESTful API 路由层。
     由 FastAPI 的依赖注入系统管理会话生命周期（请求结束自动关闭）。
 """
 
+from datetime import date
 from decimal import Decimal
 import os
 
@@ -44,7 +45,7 @@ from .auth import (
     verify_credentials,
 )
 from .database import get_db
-from .models import AuthSession, MarketIndex, Order, Position, SimulationAccount, Stock, Trade, User, WatchlistItem
+from .models import AuthSession, DailyReviewNote, MarketIndex, Order, Position, SimulationAccount, Stock, Trade, TradeNote, User, WatchlistItem
 from .rate_limit import (
     acquire_analysis_lease,
     clear_fixed_window,
@@ -61,6 +62,8 @@ from .agent.orchestrator import (
 )
 from .schemas import (
     AccountOut,
+    DailySnapshotOut,
+    DayReviewOut,
     AgentRunOut,
     CurrentUserOut,
     LoginIn,
@@ -71,6 +74,8 @@ from .schemas import (
     OrderPreviewOut,
     PositionOut,
     RegisterIn,
+    ReviewNoteIn,
+    ReviewNoteOut,
     StockAnalysisCreate,
     StockHistoryOut,
     StockAnnouncementsOut,
@@ -96,6 +101,7 @@ from .services.trading import (
     place_order,
     position_sellable_values,
 )
+from .services.review import cents, day_review, last_completed_date, local_date, rebuild_daily_snapshots, snapshot_values
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +235,9 @@ def order_values(order: Order) -> dict:
         "side": order.side,                   # 买卖方向
         "order_type": order.order_type,       # 订单类型
         "limit_price": order.limit_price,
+        "submitted_quote_price": order.submitted_quote_price,
+        "submitted_quote_at": order.submitted_quote_at,
+        "filled_quote_at": order.filled_quote_at,
         "quantity": order.quantity,           # 委托数量
         "filled_quantity": order.filled_quantity,  # 已成交数量
         "price": order.price,                 # 成交价格
@@ -650,6 +659,11 @@ def account_summary(
 
     # 总盈亏（相对于初始资金）
     profit_loss = total_assets - account.initial_cash
+    floating_profit_loss = cents(market_value - sum(
+        (position.average_cost * position.quantity for position in positions),
+        Decimal("0"),
+    ))
+    realized_profit_loss = profit_loss - floating_profit_loss
 
     # 总收益率（百分比）
     return_percent = (
@@ -664,6 +678,8 @@ def account_summary(
         "market_value": market_value,               # 持仓市值
         "total_assets": total_assets,               # 总资产
         "total_profit_loss": profit_loss,           # 总盈亏
+        "realized_profit_loss": realized_profit_loss,
+        "floating_profit_loss": floating_profit_loss,
         "total_return_percent": return_percent,     # 总收益率(%)
     }
 
@@ -748,14 +764,14 @@ def create_order(
     db: Session = Depends(get_db),
 ) -> dict:
     """
-    创建交易订单（市价买入或卖出）。
+    创建当日有效的模拟委托（市价或限价）。
 
     请求体（OrderCreate 自动校验）：
         - symbol  : 股票代码
         - side    : "BUY" 或 "SELL"
         - quantity: 委托数量（>0，≤1000000，且必须为 100 的整数倍）
 
-    下单逻辑委托给 place_market_order() 处理，包含：
+    下单逻辑委托给 place_order() 处理，包含：
         - 资金校验
         - 持仓校验
         - 费用计算
@@ -764,7 +780,7 @@ def create_order(
 
     成功返回 201 Created，失败返回 400 或 404。
 
-    注意：当前版本为市价单，提交即成交，无需轮询订单状态。
+    市价单在有效连续竞价行情下按快照价模拟成交；未触价限价单进入待成交，收盘后过期。
     """
     # 调用交易引擎执行下单
     order = place_order(
@@ -871,7 +887,87 @@ def list_trades(
             "price": trade.price,                   # 成交价格
             "amount": trade.amount,                 # 成交金额
             "fee": trade.fee,                       # 交易费用
+            "filled_quote_at": trade.filled_quote_at,
             "created_at": trade.created_at,         # 成交时间
         }
         for trade in trades
     ]
+
+
+# ===========================================================================
+# v0.4 学习复盘：快照由成交、资金流水与历史日线重建
+# ===========================================================================
+
+@router.get("/review/snapshots", response_model=list[DailySnapshotOut])
+def list_daily_snapshots(
+    days: int = Query(default=90, ge=1, le=365),
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    snapshots = rebuild_daily_snapshots(db, account)
+    return [snapshot_values(item) for item in snapshots[-days:]]
+
+
+@router.get("/review/days/{review_date}", response_model=DayReviewOut)
+def get_day_review(
+    review_date: date,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    return day_review(db, account, review_date)
+
+
+@router.put("/review/days/{review_date}/note", response_model=ReviewNoteOut)
+def save_day_review_note(
+    review_date: date,
+    payload: ReviewNoteIn,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    if review_date < local_date(account.created_at) or review_date > last_completed_date():
+        raise HTTPException(status_code=404, detail="该日期尚无已完成的账户快照")
+    note = db.scalar(select(DailyReviewNote).where(
+        DailyReviewNote.account_id == account.id,
+        DailyReviewNote.review_date == review_date,
+    ))
+    if not payload.content:
+        if note is not None:
+            db.delete(note)
+    elif note is None:
+        db.add(DailyReviewNote(
+            account_id=account.id, review_date=review_date, content=payload.content,
+        ))
+    else:
+        note.content = payload.content
+    db.commit()
+    return {"content": payload.content or None}
+
+
+@router.put("/review/trades/{trade_no}/note", response_model=ReviewNoteOut)
+def save_trade_review_note(
+    trade_no: str,
+    payload: ReviewNoteIn,
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+) -> dict:
+    trade = db.scalar(select(Trade).where(
+        Trade.account_id == account.id,
+        Trade.trade_no == trade_no,
+    ))
+    if trade is None:
+        raise HTTPException(status_code=404, detail="成交记录不存在")
+    note = db.scalar(select(TradeNote).where(
+        TradeNote.account_id == account.id,
+        TradeNote.trade_id == trade.id,
+    ))
+    if not payload.content:
+        if note is not None:
+            db.delete(note)
+    elif note is None:
+        db.add(TradeNote(
+            account_id=account.id, trade_id=trade.id, content=payload.content,
+        ))
+    else:
+        note.content = payload.content
+    db.commit()
+    return {"content": payload.content or None}

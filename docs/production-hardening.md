@@ -114,6 +114,9 @@ sh scripts/backup_mysql.sh
 - 生成并校验数据库备份；
 - 保存当前 `.env`、镜像标签和 Compose project name；
 - 确认没有同时启动第二个 backend worker 或副本。
+- v0.3 发布前确认 `backend/app/services/market/calendar.py` 包含目标年份的沪深京休市公告；未知年份工作日默认停止委托和定时行情刷新。
+- v0.3 会给 `stocks`、`orders`、`trades` 增加可空的行情来源时间字段；先备份，再在隔离环境用旧数据演练启动升级。旧记录保留空值，不会伪造历史快照时间。
+- v0.4 使用 `create_all` 新增 `account_daily_snapshots`、`trade_notes`、`daily_review_notes`、`stock_raw_closes` 和 `raw_close_syncs`。后台首次运行会按账户历史成交逐日建立快照，并为有成交的股票渐进补取未复权历史收盘价；先在隔离库验证旧成交、资金流水和未复权价格的覆盖率，再发布。快照可重算，笔记属于用户数据，备份与恢复时必须一起保留。
 
 ```sh
 frontend_image=$(docker compose images -q frontend)

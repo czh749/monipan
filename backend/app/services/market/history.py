@@ -36,12 +36,13 @@ def fetch_eastmoney_history(
     limit: int = HISTORY_FETCH_LIMIT,
     *,
     max_wait_seconds: float = 5.0,
+    adjusted: bool = True,
 ) -> list[dict[str, Any]]:
-    """Fetch forward-adjusted daily bars from Eastmoney's public quote endpoint."""
+    """Fetch daily bars; charts use adjusted, account valuation uses raw prices."""
     params = {
         "secid": _eastmoney_secid(symbol),
         "klt": "101",
-        "fqt": "1",
+        "fqt": "1" if adjusted else "0",
         "lmt": str(limit),
         "end": "20500101",
         "fields1": "f1,f2,f3,f4,f5,f6",

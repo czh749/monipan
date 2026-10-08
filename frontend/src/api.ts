@@ -12,6 +12,8 @@ import type {
   StockHistory,
   StockRegulatoryLetters,
   Trade,
+  DailySnapshot,
+  DayReview,
   WatchlistItem,
   AuthRequest,
   CurrentUser,
@@ -73,6 +75,16 @@ export const api = {
   positions: () => request<Position[]>('/api/positions'),
   orders: () => request<Order[]>('/api/orders'),
   trades: () => request<Trade[]>('/api/trades'),
+  reviewSnapshots: (days = 90) => request<DailySnapshot[]>(`/api/review/snapshots?days=${days}`),
+  dayReview: (date: string) => request<DayReview>(`/api/review/days/${date}`),
+  saveDayReviewNote: (date: string, content: string) =>
+    request<{ content: string | null }>(`/api/review/days/${date}/note`, {
+      method: 'PUT', body: JSON.stringify({ content }),
+    }),
+  saveTradeNote: (tradeNo: string, content: string) =>
+    request<{ content: string | null }>(`/api/review/trades/${tradeNo}/note`, {
+      method: 'PUT', body: JSON.stringify({ content }),
+    }),
   watchlist: () => request<WatchlistItem[]>('/api/watchlist'),
   addWatchlist: (symbol: string) => request<WatchlistItem>(`/api/watchlist/${symbol}`, { method: 'POST' }),
   removeWatchlist: (symbol: string) => request<void>(`/api/watchlist/${symbol}`, { method: 'DELETE' }),

@@ -18,7 +18,7 @@ const emit = defineEmits<{
 }>()
 
 function statusLabel(status: string) {
-  return ({ FILLED: '已成交', PENDING: '待成交', CANCELED: '已撤单', REJECTED: '已拒绝' } as Record<string, string>)[status] ?? status
+  return ({ FILLED: '已成交', PENDING: '待成交', CANCELED: '已撤单', REJECTED: '已拒绝', EXPIRED: '已过期' } as Record<string, string>)[status] ?? status
 }
 </script>
 
@@ -50,27 +50,30 @@ function statusLabel(status: string) {
         </tbody>
       </table>
       <table v-else-if="activeTab === 'orders'">
-        <thead><tr><th>时间</th><th>股票</th><th>方向</th><th>类型 / 委托价</th><th>委托数量</th><th>成交价格</th><th>费用</th><th>状态</th><th></th></tr></thead>
+        <thead><tr><th>时间</th><th>股票</th><th>方向</th><th>类型 / 委托价</th><th>委托数量</th><th>参考行情</th><th>成交价格</th><th>成交依据时间</th><th>费用</th><th>状态</th><th></th></tr></thead>
         <tbody>
           <tr v-for="order in orders" :key="order.order_no">
             <td>{{ dateTime(order.created_at) }}</td>
             <td><strong>{{ order.stock_name }}</strong><small>{{ order.symbol }}</small></td>
             <td :class="order.side === 'BUY' ? 'rise' : 'fall'">{{ order.side === 'BUY' ? '买入' : '卖出' }}</td>
             <td>{{ order.order_type === 'LIMIT' ? `限价 ${formatNumber(order.limit_price ?? order.price)}` : '市价' }}</td>
-            <td>{{ order.quantity }}</td><td>{{ order.status === 'FILLED' ? formatNumber(order.price) : '—' }}</td>
+            <td>{{ order.quantity }}</td>
+            <td><strong>{{ order.submitted_quote_price === null ? '—' : formatNumber(order.submitted_quote_price) }}</strong><small>{{ dateTime(order.submitted_quote_at) }}</small></td>
+            <td>{{ order.status === 'FILLED' ? formatNumber(order.price) : '—' }}</td>
+            <td>{{ dateTime(order.filled_quote_at) }}</td>
             <td>{{ formatNumber(order.fee) }}</td><td><span class="status-pill" :class="`status-${order.status.toLowerCase()}`">{{ statusLabel(order.status) }}</span></td>
             <td><button v-if="order.cancelable" class="text-action cancel-action" @click="emit('cancelOrder', order.order_no)">撤单</button><small v-else class="order-id">{{ order.order_no }}</small></td>
           </tr>
         </tbody>
       </table>
       <table v-else>
-        <thead><tr><th>成交时间</th><th>股票</th><th>方向</th><th>数量</th><th>成交价</th><th>成交金额</th><th>费用</th><th>成交编号</th></tr></thead>
+        <thead><tr><th>成交时间</th><th>股票</th><th>方向</th><th>数量</th><th>成交价</th><th>行情依据时间</th><th>成交金额</th><th>费用</th><th>成交编号</th></tr></thead>
         <tbody>
           <tr v-for="trade in trades" :key="trade.trade_no">
             <td>{{ dateTime(trade.created_at) }}</td>
             <td><strong>{{ trade.stock_name }}</strong><small>{{ trade.symbol }}</small></td>
             <td :class="trade.side === 'BUY' ? 'rise' : 'fall'">{{ trade.side === 'BUY' ? '买入' : '卖出' }}</td>
-            <td>{{ trade.quantity }}</td><td>{{ formatNumber(trade.price) }}</td>
+            <td>{{ trade.quantity }}</td><td>{{ formatNumber(trade.price) }}</td><td>{{ dateTime(trade.filled_quote_at) }}</td>
             <td>¥ {{ formatNumber(trade.amount) }}</td><td>{{ formatNumber(trade.fee) }}</td>
             <td class="muted">{{ trade.trade_no }}</td>
           </tr>

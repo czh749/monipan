@@ -85,12 +85,12 @@ def _volume_in_shares(value: Any) -> int | None:
     return int(lots * 100)
 
 
-def _quote_trade_date(value: Any) -> date | None:
-    """Parse the provider's last-trade timestamp into a China-market date.
+def _quote_source_at(value: Any) -> datetime | None:
+    """Parse the provider's last-trade timestamp into naive UTC.
 
     ``f124`` is deliberately kept separate from ``fetched_at``.  During a
     weekend or exchange holiday the endpoint can still return Friday's quote;
-    using the HTTP request time would manufacture a bar for a non-trading day.
+    using the HTTP request time would make that old quote look fresh.
     """
     try:
         timestamp = float(value)
@@ -101,12 +101,17 @@ def _quote_trade_date(value: Any) -> date | None:
     if timestamp >= 1_000_000_000_000:
         timestamp /= 1000
     try:
-        parsed = datetime.fromtimestamp(timestamp, UTC).astimezone(CHINA_TZ)
+        parsed = datetime.fromtimestamp(timestamp, UTC)
     except (OSError, OverflowError, ValueError):
         return None
     if parsed.year < 2000 or parsed.year > 2100:
         return None
-    return parsed.date()
+    return parsed.replace(tzinfo=None)
+
+
+def _quote_trade_date(value: Any) -> date | None:
+    source_at = _quote_source_at(value)
+    return source_at.replace(tzinfo=UTC).astimezone(CHINA_TZ).date() if source_at else None
 
 
 def _eastmoney_secid(symbol: str) -> str:
@@ -162,6 +167,7 @@ def _fetch_eastmoney_quote_batch(
             "low_price": _positive_decimal(row.get("f16")),
             "volume": _volume_in_shares(row.get("f5")),
             "quote_trade_date": _quote_trade_date(row.get("f124")),
+            "quote_source_at": _quote_source_at(row.get("f124")),
             "updated_at": fetched_at,
         }
     return quotes, None

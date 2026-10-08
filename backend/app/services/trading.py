@@ -18,12 +18,45 @@ from ..models import (
     Trade,
 )
 from .market.constants import CHINA_TZ
+from .market.session import is_continuous_trading, market_refresh_interval, market_session
 
 
 CENT = Decimal("0.01")
 COMMISSION_RATE = Decimal("0.0003")
 MIN_COMMISSION = Decimal("5.00")
 SELL_STAMP_DUTY_RATE = Decimal("0.0005")
+
+
+def trading_now() -> datetime:
+    """Clock boundary kept in one place for deterministic order tests."""
+    return datetime.now(UTC)
+
+
+def quote_blocking_reason(stock: Stock, now: datetime) -> str | None:
+    """Reject cached or non-session quotes before they can set a fill price."""
+    if stock.quote_source_at is None or stock.quote_trade_date is None:
+        return "缺少行情源时间，暂不可按该价格模拟成交"
+    source_at = stock.quote_source_at.replace(tzinfo=UTC)
+    fetched_at = stock.updated_at.replace(tzinfo=UTC)
+    if stock.quote_trade_date != now.astimezone(CHINA_TZ).date():
+        return "该股票行情并非当前交易日，暂不可下单"
+    if not is_continuous_trading(source_at):
+        return "该股票尚无连续竞价时段的有效报价，暂不可下单"
+    max_age = int(market_refresh_interval() * 2.5 + 0.5)
+    source_age = (now - source_at).total_seconds()
+    fetch_age = (now - fetched_at).total_seconds()
+    if source_age < -60 or fetch_age < -60:
+        return "行情时间异常，暂不可下单"
+    if source_age > max_age or fetch_age > max_age:
+        return f"该股票行情超过 {max_age} 秒新鲜阈值，暂不可下单"
+    return None
+
+
+def trading_blocking_reason(stock: Stock, now: datetime) -> str | None:
+    session, label, _ = market_session(now)
+    if session not in {"morning", "afternoon"}:
+        return f"{label}，仅连续竞价时段接受模拟委托"
+    return quote_blocking_reason(stock, now)
 
 
 def money(value: Decimal) -> Decimal:
@@ -37,13 +70,11 @@ def calculate_fee(side: str, amount: Decimal) -> Decimal:
 
 
 def price_limit_rate(stock: Stock) -> Decimal:
-    """Return the daily price-limit rate for the stock's board."""
-    if "ST" in stock.name.upper():
-        return Decimal("0.05")
+    """Current board rate; main-board ST also uses 10% since 2026-07-06."""
+    if stock.exchange == "BSE" or stock.symbol.startswith(("4", "8", "92")):
+        return Decimal("0.30")
     if stock.symbol.startswith(("688", "300", "301")):
         return Decimal("0.20")
-    if stock.symbol.startswith(("4", "8")):
-        return Decimal("0.30")
     return Decimal("0.10")
 
 
@@ -55,7 +86,7 @@ def price_limits(stock: Stock) -> tuple[Decimal, Decimal, Decimal]:
 
 
 def _today_utc_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
-    observed = now or datetime.now(UTC)
+    observed = now or trading_now()
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=UTC)
     local_date = observed.astimezone(CHINA_TZ).date()
@@ -150,7 +181,10 @@ def build_order_preview(
     quantity: int,
     order_type: str = "MARKET",
     limit_price: Decimal | None = None,
+    *,
+    now: datetime | None = None,
 ) -> dict:
+    observed_at = now or trading_now()
     stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
     if not stock:
         raise HTTPException(status_code=404, detail="股票不存在")
@@ -177,17 +211,18 @@ def build_order_preview(
         else orderable
     )
 
-    blocking_reason: str | None = None
-    if order_type == "LIMIT" and limit_price is not None and not lower <= limit_price <= upper:
-        blocking_reason = f"委托价须在当日涨跌停区间 ¥{lower}—¥{upper} 内"
-    elif side == "BUY" and estimated_total > buying_power:
-        blocking_reason = "可用资金不足（已扣除待成交买单占用）"
-    elif side == "SELL" and quantity > orderable:
-        blocking_reason = "T+1 可卖数量不足或已有待成交卖单占用"
-    elif order_type == "MARKET" and side == "BUY" and stock.price >= upper:
-        blocking_reason = "当前已涨停，市价买入无法保证成交"
-    elif order_type == "MARKET" and side == "SELL" and stock.price <= lower:
-        blocking_reason = "当前已跌停，市价卖出无法保证成交"
+    blocking_reason = trading_blocking_reason(stock, observed_at)
+    if blocking_reason is None:
+        if order_type == "LIMIT" and limit_price is not None and not lower <= limit_price <= upper:
+            blocking_reason = f"委托价须在当日涨跌停区间 ¥{lower}—¥{upper} 内"
+        elif side == "BUY" and estimated_total > buying_power:
+            blocking_reason = "可用资金不足（已扣除待成交买单占用）"
+        elif side == "SELL" and quantity > orderable:
+            blocking_reason = "T+1 可卖数量不足或已有待成交卖单占用"
+        elif order_type == "MARKET" and side == "BUY" and stock.price >= upper:
+            blocking_reason = "当前已涨停，市价买入无法保证成交"
+        elif order_type == "MARKET" and side == "SELL" and stock.price <= lower:
+            blocking_reason = "当前已跌停，市价卖出无法保证成交"
 
     current_market_value = _portfolio_market_value(db, account.id)
     position_value_delta = stock.price * quantity * (Decimal("1") if side == "BUY" else Decimal("-1"))
@@ -204,9 +239,6 @@ def build_order_preview(
         else Decimal("0")
     )
     warnings: list[str] = []
-    quote_age = (datetime.now(UTC).replace(tzinfo=None) - stock.updated_at).total_seconds()
-    if quote_age > 20 * 60:
-        warnings.append("当前行情超过 20 分钟未更新，请确认数据时效")
     if side == "BUY" and post_ratio >= Decimal("80"):
         warnings.append("成交后总仓位将超过 80%，请关注现金缓冲")
     current_position_value = (position.quantity if position else 0) * stock.price
@@ -238,6 +270,7 @@ def build_order_preview(
         "upper_limit": upper,
         "lower_limit": lower,
         "quote_updated_at": stock.updated_at,
+        "quote_source_at": stock.quote_source_at,
         "allowed": blocking_reason is None,
         "blocking_reason": blocking_reason,
         "warnings": warnings,
@@ -289,8 +322,10 @@ def _fill_order(
         account.available_cash = money(account.available_cash + proceeds)
         cash_change = proceeds
 
-    position.updated_at = datetime.now(UTC).replace(tzinfo=None)
+    filled_at = trading_now().astimezone(UTC).replace(tzinfo=None)
+    position.updated_at = filled_at
     order.price = execution_price
+    order.filled_quote_at = stock.quote_source_at
     order.fee = fee
     order.filled_quantity = order.quantity
     order.status = "FILLED"
@@ -305,6 +340,8 @@ def _fill_order(
             price=execution_price,
             amount=amount,
             fee=fee,
+            filled_quote_at=stock.quote_source_at,
+            created_at=filled_at,
         )
     )
     db.add(
@@ -314,6 +351,7 @@ def _fill_order(
             transaction_type=order.side,
             amount=cash_change,
             balance_after=account.available_cash,
+            created_at=filled_at,
         )
     )
 
@@ -387,6 +425,7 @@ def place_order(
     limit_price: Decimal | None = None,
     idempotency_key: str | None = None,
 ) -> Order:
+    observed_at = trading_now()
     operation_key = idempotency_key or f"server-{uuid4().hex}"
     existing = _idempotent_order(
         db,
@@ -404,12 +443,15 @@ def place_order(
         )
 
     preview = build_order_preview(
-        db, account, symbol, side, quantity, order_type, limit_price
+        db, account, symbol, side, quantity, order_type, limit_price, now=observed_at
     )
     if not preview["allowed"]:
         raise HTTPException(status_code=400, detail=preview["blocking_reason"])
     stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
     assert stock is not None
+    current_blocker = trading_blocking_reason(stock, trading_now())
+    if current_blocker:
+        raise HTTPException(status_code=400, detail=current_blocker)
     requested_price = limit_price if order_type == "LIMIT" else stock.price
     order = Order(
         order_no=f"O{uuid4().hex[:16].upper()}",
@@ -422,8 +464,11 @@ def place_order(
         filled_quantity=0,
         price=requested_price,
         limit_price=limit_price,
+        submitted_quote_price=stock.price,
+        submitted_quote_at=stock.quote_source_at,
         fee=Decimal("0"),
         status="PENDING",
+        created_at=observed_at.astimezone(UTC).replace(tzinfo=None),
     )
     try:
         db.add(order)
@@ -498,8 +543,32 @@ def cancel_order(
     return order
 
 
+def expire_pending_orders(db: Session, now: datetime | None = None) -> int:
+    """Expire unfilled day orders after 15:00 China time or on a later date."""
+    observed = now or trading_now()
+    local_now = observed.astimezone(CHINA_TZ)
+    pending = db.scalars(select(Order).where(Order.status == "PENDING")).all()
+    expired = 0
+    for order in pending:
+        submitted_at = order.created_at.replace(tzinfo=UTC).astimezone(CHINA_TZ)
+        if submitted_at.date() < local_now.date() or (
+            submitted_at.date() == local_now.date()
+            and local_now.time() >= time(15, 0)
+        ):
+            order.status = "EXPIRED"
+            order.reject_reason = "当日有效委托已过期"
+            expired += 1
+    if expired:
+        db.commit()
+    return expired
+
+
 def match_pending_orders(db: Session) -> int:
     """Fill limit orders crossed by the latest quote; reject orders invalid at fill time."""
+    observed_at = trading_now()
+    expire_pending_orders(db, observed_at)
+    if not is_continuous_trading(observed_at):
+        return 0
     orders = db.scalars(
         select(Order)
         .where(Order.status == "PENDING", Order.order_type == "LIMIT")
@@ -509,6 +578,10 @@ def match_pending_orders(db: Session) -> int:
     matched = 0
     for order in orders:
         stock = order.stock
+        if quote_blocking_reason(stock, observed_at):
+            continue
+        if order.submitted_quote_at and stock.quote_source_at <= order.submitted_quote_at:
+            continue
         limit_price = order.limit_price or order.price
         crossed = (
             order.side == "BUY" and stock.price <= limit_price

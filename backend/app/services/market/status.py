@@ -31,6 +31,11 @@ def market_status_values(
     )
 
     valid_quote = (Stock.price > 0, Stock.prev_close > 0)
+    latest_allowed_at = observed_at + timedelta(seconds=60)
+    valid_source_time = (
+        *valid_quote,
+        Stock.quote_source_at <= latest_allowed_at,
+    )
     total_count = db.scalar(select(func.count()).select_from(Stock)) or 0
     available_count = (
         db.scalar(
@@ -39,7 +44,7 @@ def market_status_values(
         or 0
     )
     latest_quote_at = db.scalar(
-        select(func.max(Stock.updated_at)).where(*valid_quote)
+        select(func.max(Stock.quote_source_at)).where(*valid_source_time)
     )
 
     quote_age_seconds: int | None = None
@@ -53,7 +58,12 @@ def market_status_values(
             db.scalar(
                 select(func.count())
                 .select_from(Stock)
-                .where(*valid_quote, Stock.updated_at >= freshness_cutoff)
+                .where(
+                    *valid_source_time,
+                    Stock.quote_source_at >= freshness_cutoff,
+                    Stock.updated_at >= freshness_cutoff,
+                    Stock.updated_at <= latest_allowed_at,
+                )
             )
             or 0
         )

@@ -94,9 +94,12 @@ onBeforeUnmount(() => ticketMotion?.revert())
       <div class="quote-provenance">
         <span class="status-dot"></span>
         <strong>{{ marketStatus?.provider_label ?? '东方财富' }} · 真实行情</strong>
-        <time :datetime="stock.updated_at" :title="fullDateTime(stock.updated_at)">
-          更新于 {{ shortDateTime(stock.updated_at) }}（{{ relativeTime(stock.updated_at, currentTime) }}）
-        </time>
+        <div class="quote-times">
+          <time :datetime="stock.quote_source_at ?? undefined" :title="fullDateTime(stock.quote_source_at)">
+            源行情 {{ stock.quote_source_at ? shortDateTime(stock.quote_source_at) : '时间未知' }}（{{ relativeTime(stock.quote_source_at, currentTime) }}）
+          </time>
+          <small>抓取于 {{ shortDateTime(stock.updated_at) }}</small>
+        </div>
       </div>
       <div class="quote-strip">
         <span>昨收<strong>{{ formatNumber(stock.prev_close) }}</strong></span>
@@ -171,7 +174,7 @@ onBeforeUnmount(() => ticketMotion?.revert())
       >
         {{ submitting ? '提交中…' : previewLoading ? '校验中…' : `复核并${side === 'BUY' ? '买入' : '卖出'} ${stock.name}` }}
       </button>
-      <p class="trade-note">市价单即时成交；限价单未触价时进入待成交。买入股票当日不可卖出。</p>
+      <p class="trade-note">仅交易日连续竞价时段可提交委托；有效行情下的市价单按快照价模拟成交。限价单当日有效，买入股票当日不可卖出。</p>
     </template>
   </aside>
 </template>

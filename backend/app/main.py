@@ -33,16 +33,18 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .api import router
 from .database import Base, SessionLocal, engine, migrate_database
+from .models import SimulationAccount
 from .runtime_config import validate_runtime_configuration
 from .seed import seed_database
 from .services.market import (
@@ -53,6 +55,10 @@ from .services.market import (
     tick_market,
     tick_market_indices,
 )
+from .services.trading import expire_pending_orders
+from .services.review import rebuild_daily_snapshots
+from .services.market.constants import CHINA_TZ
+from .services.market.raw_close import backfill_raw_closes_once
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -71,6 +77,10 @@ HISTORY_BACKFILL_FAILURE_INTERVAL_SECONDS = float(
 HISTORY_BACKFILL_IDLE_INTERVAL_SECONDS = float(
     os.getenv("MONIPAN_HISTORY_IDLE_INTERVAL", "900")
 )
+RAW_CLOSE_INITIAL_DELAY_SECONDS = 120
+RAW_CLOSE_SUCCESS_INTERVAL_SECONDS = 5
+RAW_CLOSE_FAILURE_INTERVAL_SECONDS = 20
+RAW_CLOSE_IDLE_INTERVAL_SECONDS = 300
 
 
 def refresh_market_once() -> tuple[int, int]:
@@ -88,6 +98,21 @@ def refresh_market_once() -> tuple[int, int]:
         return stock_updated, index_updated
 
 
+def expire_orders_once() -> int:
+    """Close day orders even when no market refresh runs after 15:00."""
+    with SessionLocal() as db:
+        return expire_pending_orders(db)
+
+
+def refresh_daily_snapshots_once() -> int:
+    """Materialize completed daily ledgers for every account once per day."""
+    with SessionLocal() as db:
+        accounts = db.scalars(select(SimulationAccount)).all()
+        for account in accounts:
+            rebuild_daily_snapshots(db, account)
+        return len(accounts)
+
+
 # ---------------------------------------------------------------------------
 # 后台行情循环
 # ---------------------------------------------------------------------------
@@ -102,8 +127,23 @@ async def market_loop() -> None:
     interval = market_refresh_interval()
     first_refresh = True
     consecutive_failures = 0
+    last_review_refresh_day = None
 
     while True:
+        review_refresh_day = datetime.now(CHINA_TZ).date()
+        if review_refresh_day != last_review_refresh_day:
+            try:
+                reviewed = await asyncio.to_thread(refresh_daily_snapshots_once)
+                last_review_refresh_day = review_refresh_day
+                logger.info("每日账户快照已核算：accounts=%s", reviewed)
+            except Exception:
+                logger.exception("每日账户快照核算失败，稍后重试")
+        try:
+            expired = await asyncio.to_thread(expire_orders_once)
+            if expired:
+                logger.info("当日限价委托过期：orders=%s", expired)
+        except Exception:
+            logger.exception("当日委托过期检查失败")
         session_open = is_a_share_session()
         if first_refresh or session_open:
             try:
@@ -166,6 +206,34 @@ async def history_backfill_loop() -> None:
             await asyncio.sleep(HISTORY_BACKFILL_FAILURE_INTERVAL_SECONDS)
 
 
+def backfill_raw_close_step(after_stock_id: int) -> tuple[int, str | None, bool]:
+    with SessionLocal() as db:
+        return backfill_raw_closes_once(db, after_stock_id)
+
+
+async def raw_close_backfill_loop() -> None:
+    """Gradually fetch unadjusted history only for symbols users have traded."""
+    await asyncio.sleep(RAW_CLOSE_INITIAL_DELAY_SECONDS)
+    cursor = 0
+    while True:
+        try:
+            cursor, symbol, success = await asyncio.to_thread(
+                backfill_raw_close_step, cursor
+            )
+        except Exception:
+            logger.exception("未复权历史价格补全失败")
+            await asyncio.sleep(RAW_CLOSE_FAILURE_INTERVAL_SECONDS)
+            continue
+        if symbol is None:
+            cursor = 0
+            await asyncio.sleep(RAW_CLOSE_IDLE_INTERVAL_SECONDS)
+        else:
+            await asyncio.sleep(
+                RAW_CLOSE_SUCCESS_INTERVAL_SECONDS if success
+                else RAW_CLOSE_FAILURE_INTERVAL_SECONDS
+            )
+
+
 # ---------------------------------------------------------------------------
 # 应用生命周期
 # ---------------------------------------------------------------------------
@@ -210,6 +278,9 @@ async def lifespan(_app: FastAPI):
     history_task = (
         asyncio.create_task(history_backfill_loop()) if background_enabled else None
     )
+    raw_close_task = (
+        asyncio.create_task(raw_close_backfill_loop()) if background_enabled else None
+    )
 
     # ------------ 应用正常运行期间 ------------
     yield
@@ -218,14 +289,14 @@ async def lifespan(_app: FastAPI):
     # ============ 关闭阶段 ============
 
     # 1. 取消后台行情任务
-    for task in (market_task, history_task):
+    for task in (market_task, history_task, raw_close_task):
         if task:
             task.cancel()
 
     # 2. 等待任务优雅退出
     #    suppress(asyncio.CancelledError): 忽略取消异常（正常关闭行为）
     #    await task: 等待任务真正结束
-    for task in (market_task, history_task):
+    for task in (market_task, history_task, raw_close_task):
         if task:
             with suppress(asyncio.CancelledError):
                 await task
@@ -238,7 +309,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="MoniPan A股模拟盘 API",
     description="固定200只A股、真实行情与模拟成交的学习型交易系统。",
-    version="0.2.0",
+    version="0.4.0",
     lifespan=lifespan,  # 绑定生命周期管理器
 )
 

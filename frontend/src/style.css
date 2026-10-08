@@ -569,6 +569,95 @@ main {
   max-height: 520px;
 }
 
+.review-nav-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.equity-pnl-split { display: flex; flex-wrap: wrap; gap: 8px 17px; margin-top: 10px; color: var(--signal-tertiary); font-size: 11px; }
+.equity-pnl-split strong { margin-left: 5px; font-family: var(--mono); font-weight: 500; }
+
+.review-workspace { display: grid; gap: 14px; margin-bottom: 28px; }
+.review-heading, .review-curve-panel, .review-equation, .review-panel {
+  border: 1px solid var(--deck-line);
+  border-radius: var(--radius-panel);
+  background: var(--deck-panel);
+}
+.review-heading { padding: 22px 24px; display: flex; justify-content: space-between; align-items: end; gap: 20px; }
+.review-heading h2 { margin: 3px 0 5px; font-size: 23px; letter-spacing: -.025em; }
+.review-heading p { margin: 0; color: var(--signal-tertiary); font-size: 13px; line-height: 1.6; }
+.review-heading-actions { display: flex; align-items: end; gap: 8px; }
+.review-heading-actions button { min-height: 38px; padding: 0 12px; white-space: nowrap; border: 1px solid var(--deck-line-strong); border-radius: var(--radius-control); color: var(--trade-signal-bright); background: var(--deck-raised); font-size: 12px; }
+.review-heading-actions button:disabled { opacity: .6; cursor: wait; }
+.review-date-picker { display: grid; gap: 7px; min-width: 165px; color: var(--signal-secondary); font-size: 12px; }
+.review-date-picker input { min-height: 38px; padding: 0 10px; border: 1px solid var(--deck-line-strong); border-radius: var(--radius-control); background: var(--deck-raised); color: var(--signal-white); font-family: var(--mono); }
+.review-curve-panel { padding: 18px 20px 13px; }
+.review-panel-title { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.review-panel-title strong { font-size: 15px; }
+.review-panel-title small { color: var(--signal-tertiary); font-size: 11px; }
+.review-curve { width: 100%; height: auto; max-height: 230px; display: block; margin-top: 9px; }
+.review-axis, .review-gridline { stroke: var(--deck-line-strong); stroke-width: 1; }
+.review-gridline { stroke: var(--deck-line-soft); }
+.review-line { fill: none; stroke: var(--trade-signal); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.review-dot { fill: var(--deck-panel); stroke: var(--trade-signal); stroke-width: 2; }
+.review-dot.selected { fill: var(--trade-signal-bright); }
+.review-curve-labels { display: flex; justify-content: space-between; padding: 0 2.5%; color: var(--signal-tertiary); font: 11px var(--mono); }
+.review-day-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.review-day-strip button { min-width: 107px; padding: 9px 11px; display: grid; gap: 3px; text-align: left; white-space: nowrap; border: 1px solid var(--deck-line); border-radius: var(--radius-control); background: var(--deck-panel); }
+.review-day-strip button span { color: var(--signal-tertiary); font: 11px var(--mono); }
+.review-day-strip button strong { font: 12px var(--mono); }
+.review-day-strip button.active { border-color: var(--trade-signal); background: var(--trade-signal-wash); }
+.review-equation { padding: 20px 24px; }
+.review-equation-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.review-equation-head strong { font: 24px var(--mono); letter-spacing: -.04em; }
+.review-equation-grid { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 14px; padding: 18px 0; }
+.review-equation-grid div { display: grid; gap: 7px; }
+.review-equation-grid div span { color: var(--signal-tertiary); font-size: 12px; }
+.review-equation-grid div strong { font: 20px var(--mono); }
+.review-symbol { color: var(--trade-signal); font: 18px var(--mono); }
+.review-reconcile-status { display: flex; flex-wrap: wrap; gap: 7px 18px; padding-top: 13px; border-top: 1px solid var(--deck-line-soft); color: var(--signal-secondary); font: 11px var(--mono); }
+.review-footnote { margin: 14px 0 0; color: var(--signal-tertiary); font-size: 12px; line-height: 1.6; }
+.review-alert, .review-feedback { margin: 0; padding: 11px 14px; border-radius: var(--radius-control); font-size: 12px; line-height: 1.5; }
+.review-alert { color: var(--warning); background: var(--warning-wash); }
+.review-feedback { color: var(--market-live); background: var(--market-fall-wash); }
+.review-equation .review-alert { margin-top: 14px; }
+.review-detail-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.review-panel { padding: 18px 20px; min-width: 0; }
+.review-empty { padding: 22px; color: var(--signal-tertiary); font-size: 13px; text-align: center; }
+.review-table-wrap { overflow-x: auto; margin-top: 14px; }
+.review-table-wrap table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 12px; }
+.review-table-wrap th { padding: 9px 12px; text-align: left; color: var(--signal-tertiary); font-weight: 500; border-bottom: 1px solid var(--deck-line); }
+.review-table-wrap td { padding: 11px 12px; border-bottom: 1px solid var(--deck-line-soft); font-family: var(--mono); }
+.review-table-wrap td:first-child { font-family: inherit; }
+.review-table-wrap td strong, .review-table-wrap td small { display: block; }
+.review-table-wrap td small { margin-top: 3px; color: var(--signal-tertiary); font-size: 10px; }
+.review-trade { padding: 14px 0; border-top: 1px solid var(--deck-line-soft); }
+.review-trade:first-of-type { margin-top: 12px; }
+.review-trade-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.review-trade-head small, .review-trade-head span { color: var(--signal-tertiary); font: 11px var(--mono); }
+.review-trade p { margin: 7px 0 12px; color: var(--signal-secondary); font: 11px var(--mono); }
+.review-trade label { display: grid; gap: 7px; color: var(--signal-secondary); font-size: 11px; }
+.review-workspace textarea { width: 100%; padding: 10px 12px; resize: vertical; border: 1px solid var(--deck-line-strong); border-radius: var(--radius-control); background: var(--deck-raised); color: var(--signal-white); font: 12px/1.6 'Noto Sans SC', sans-serif; }
+.review-workspace textarea:focus-visible { outline: 2px solid var(--trade-signal); outline-offset: 2px; }
+.review-trade button, .review-daily-note button { margin-top: 10px; padding: 7px 12px; border: 1px solid var(--trade-signal); border-radius: var(--radius-control); color: var(--trade-signal-bright); background: var(--trade-signal-wash); font-size: 12px; }
+.review-trade button:disabled, .review-daily-note button:disabled { opacity: .6; cursor: wait; }
+.review-daily-note textarea { margin-top: 12px; }
+
+@media (max-width: 900px) {
+  .review-detail-grid { grid-template-columns: 1fr; }
+  .review-equation-grid { gap: 8px; }
+  .review-equation-grid div strong { font-size: 16px; }
+}
+@media (max-width: 680px) {
+  .review-nav-actions { width: 100%; }
+  .review-nav-actions button { flex: 1 1 160px; }
+  .review-heading { align-items: stretch; flex-direction: column; padding: 18px 16px; }
+  .review-date-picker { width: 100%; }
+  .review-heading-actions { width: 100%; }
+  .review-equation { padding: 18px 16px; }
+  .review-equation-head strong { font-size: 18px; }
+  .review-equation-grid { grid-template-columns: 1fr; gap: 6px; }
+  .review-symbol { font-size: 13px; }
+  .review-equation-grid div { grid-template-columns: 1fr auto; align-items: baseline; }
+  .review-panel { padding: 16px; }
+}
+
 .auth-main,
 .auth-loading-shell {
   min-height: calc(100vh - 116px);
@@ -1951,12 +2040,24 @@ td small {
   font-weight: 500;
 }
 
-.quote-provenance time {
+.quote-times {
   margin-left: auto;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.quote-provenance time,
+.quote-provenance .quote-times small {
   color: var(--signal-tertiary);
   font-family: var(--mono);
   font-size: 11px;
   white-space: nowrap;
+}
+
+.quote-provenance .quote-times small {
+  color: var(--signal-faint);
+  font-size: 10px;
 }
 
 .quote-strip {
@@ -3108,9 +3209,10 @@ footer {
     padding: 7px 9px;
   }
 
-  .quote-provenance time {
+  .quote-times {
     width: 100%;
     margin-left: 12px;
+    justify-items: start;
   }
 
   .market-data-alert {

@@ -27,20 +27,11 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # --chown 将文件所有权赋予 monipan 用户
 COPY --chown=monipan:monipan app ./app
 
-# ---- 数据目录 ----
-# 创建 SQLite 数据目录并设置权限
 RUN mkdir -p /app/data && chown -R monipan:monipan /app
 
-# ---- 切换用户 ----
-# 以非 root 用户运行应用（安全最佳实践，遵循最小权限原则）
 USER monipan
 
-# ---- 暴露端口 ----
-# 8000: FastAPI/Uvicorn 默认端口
+
 EXPOSE 8000
 
-# ---- 启动命令 ----
-# 以 Uvicorn ASGI 服务器运行 FastAPI 应用
-# --host 0.0.0.0: 监听所有网络接口（容器内必须用 0.0.0.0，不能用 127.0.0.1）
-# --port 8000: 监听 8000 端口
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

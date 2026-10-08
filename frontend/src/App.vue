@@ -5,6 +5,7 @@ import AuthGateway from './components/AuthGateway.vue'
 import MarketMatrix from './components/MarketMatrix.vue'
 import OrderConfirmation from './components/OrderConfirmation.vue'
 import OrderTicket from './components/OrderTicket.vue'
+import ReviewWorkspace from './components/ReviewWorkspace.vue'
 import StockAnalysisWorkspace from './components/StockAnalysisWorkspace.vue'
 import StockDetailsDrawer from './components/StockDetailsDrawer.vue'
 import TradingRecords from './components/TradingRecords.vue'
@@ -24,7 +25,7 @@ import {
 } from './utils/formatters'
 
 type TradingTab = 'positions' | 'orders' | 'trades'
-type AppView = 'trading' | 'account'
+type AppView = 'trading' | 'account' | 'review'
 
 interface OrderNotice {
   kind: 'success' | 'error'
@@ -136,7 +137,7 @@ const marketWarning = computed(() => {
     return ''
   }
   const snapshot = status.latest_quote_at
-    ? ` 最近成功行情：${fullDateTime(status.latest_quote_at)}。`
+    ? ` 最近源行情：${fullDateTime(status.latest_quote_at)}。`
     : ''
   return `${status.status_message}${snapshot}`
 })
@@ -188,6 +189,11 @@ async function openTradingDesk() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+function openReview() {
+  activeView.value = 'review'
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 function showStockDetails(stock: Stock) {
   selectedSymbol.value = stock.symbol
   detailOpen.value = true
@@ -227,8 +233,10 @@ function setActiveTab(tab: TradingTab) {
 async function refreshOrderPreview() {
   const stock = selectedStock.value
   if (!currentUser.value || !stock || quantity.value <= 0 || quantity.value % 100 !== 0 || (orderType.value === 'LIMIT' && limitPrice.value <= 0)) {
+    previewRequestId++
     orderPreview.value = null
-    return
+    previewLoading.value = false
+    return null
   }
   const requestId = ++previewRequestId
   previewLoading.value = true
@@ -240,7 +248,11 @@ async function refreshOrderPreview() {
       order_type: orderType.value,
       ...(orderType.value === 'LIMIT' ? { limit_price: limitPrice.value } : {}),
     })
-    if (requestId === previewRequestId) orderPreview.value = result
+    if (requestId === previewRequestId) {
+      orderPreview.value = result
+      return result
+    }
+    return null
   } catch (reason) {
     if (requestId === previewRequestId) {
       orderPreview.value = null
@@ -251,12 +263,22 @@ async function refreshOrderPreview() {
         meta: stock.symbol,
       })
     }
+    return null
   } finally {
     if (requestId === previewRequestId) previewLoading.value = false
   }
 }
 
-function reviewOrder() {
+function previewMatchesSelection(preview: OrderPreview) {
+  return preview.symbol === selectedSymbol.value
+    && preview.side === side.value
+    && preview.quantity === quantity.value
+    && preview.order_type === orderType.value
+    && (orderType.value !== 'LIMIT'
+      || Number(preview.limit_price).toFixed(2) === Number(limitPrice.value).toFixed(2))
+}
+
+async function reviewOrder() {
   if (!selectedStock.value || quantity.value <= 0 || quantity.value % 100 !== 0) {
     showOrderNotice({
       kind: 'error',
@@ -269,11 +291,12 @@ function reviewOrder() {
     return
   }
 
-  if (!orderPreview.value?.allowed) {
+  const latestPreview = await refreshOrderPreview()
+  if (!latestPreview?.allowed || !previewMatchesSelection(latestPreview)) {
     showOrderNotice({
       kind: 'error',
       title: '委托未通过校验',
-      message: orderPreview.value?.blocking_reason ?? '请等待风险预览完成',
+      message: latestPreview?.blocking_reason ?? '请等待风险预览完成',
       meta: selectedStock.value.symbol,
     })
     return
@@ -283,6 +306,17 @@ function reviewOrder() {
 
 async function confirmOrder() {
   if (!selectedStock.value || !orderPreview.value) return
+  if (!orderPreview.value.allowed || !previewMatchesSelection(orderPreview.value)) {
+    confirmationOpen.value = false
+    await refreshOrderPreview()
+    showOrderNotice({
+      kind: 'error',
+      title: '请重新复核委托',
+      message: '行情或委托条件已变化，请确认最新预览后再提交',
+      meta: selectedSymbol.value,
+    })
+    return
+  }
   const stock = selectedStock.value
   const orderSide = side.value
   const orderQuantity = quantity.value
@@ -495,9 +529,15 @@ watch(selectedStock, (stock, previous) => {
   }
 }, { immediate: true })
 
-watch([selectedSymbol, side, quantity, orderType, limitPrice, account, positions, orders], () => {
+watch([selectedStock, selectedSymbol, side, quantity, orderType, limitPrice, account, positions, orders], () => {
   window.clearTimeout(previewTimer)
   previewTimer = window.setTimeout(() => void refreshOrderPreview(), 180)
+})
+
+watch(() => Math.floor(currentTime.value / 30_000), () => {
+  if (currentUser.value && activeView.value === 'trading' && document.visibilityState === 'visible') {
+    void refreshOrderPreview()
+  }
 })
 
 onMounted(async () => {
@@ -542,8 +582,8 @@ onBeforeUnmount(() => {
       <div class="desk-context">
         <span class="context-index">01</span>
         <div>
-          <strong>{{ activeView === 'account' && currentUser ? '个人中心' : '交易驾驶舱' }}</strong>
-          <small>{{ activeView === 'account' && currentUser ? 'ACCOUNT LEDGER' : 'MARKET OPERATIONS' }}</small>
+          <strong>{{ activeView === 'review' ? '学习复盘' : activeView === 'account' && currentUser ? '个人中心' : '交易驾驶舱' }}</strong>
+          <small>{{ activeView === 'review' ? 'DAILY REVIEW' : activeView === 'account' && currentUser ? 'ACCOUNT LEDGER' : 'MARKET OPERATIONS' }}</small>
         </div>
       </div>
       <div class="market-status" :class="marketStatusClass">
@@ -558,8 +598,8 @@ onBeforeUnmount(() => {
           v-if="currentUser"
           type="button"
           class="user-center-button"
-          :class="{ active: activeView === 'account' }"
-          :aria-current="activeView === 'account' ? 'page' : undefined"
+          :class="{ active: activeView === 'account' || activeView === 'review' }"
+          :aria-current="activeView === 'account' || activeView === 'review' ? 'page' : undefined"
           @click="openPersonalCenter"
         >
           <span class="avatar">{{ currentUser.username.slice(0, 1).toUpperCase() }}</span>
@@ -602,20 +642,21 @@ onBeforeUnmount(() => {
       />
     </main>
 
-    <main v-else :class="{ 'account-center-main': activeView === 'account' }">
-      <section v-if="activeView === 'account'" class="account-center-head">
+    <main v-else :class="{ 'account-center-main': activeView === 'account' || activeView === 'review' }">
+      <section v-if="activeView === 'account' || activeView === 'review'" class="account-center-head">
         <div class="account-center-identity">
           <span class="account-avatar">{{ currentUser.username.slice(0, 1).toUpperCase() }}</span>
           <div>
             <span class="section-kicker">PERSONAL ACCOUNT CENTER</span>
-            <h1>{{ currentUser.username }} 的账户账簿</h1>
-            <p>集中查看资金分布、当前持仓与全部模拟交易流水。</p>
+            <h1>{{ activeView === 'review' ? `${currentUser.username} 的学习复盘` : `${currentUser.username} 的账户账簿` }}</h1>
+            <p>{{ activeView === 'review' ? '从每日资产变化回看现金、持仓与每笔成交。' : '集中查看资金分布、当前持仓与全部模拟交易流水。' }}</p>
           </div>
         </div>
-        <button type="button" class="account-return" @click="openTradingDesk">
-          <span aria-hidden="true">←</span>
-          返回交易驾驶舱
-        </button>
+        <div class="review-nav-actions">
+          <button v-if="activeView === 'account'" type="button" class="account-return" @click="openReview">查看每日复盘 →</button>
+          <button v-else type="button" class="account-return" @click="openPersonalCenter">← 返回账户账簿</button>
+          <button type="button" class="account-return" @click="openTradingDesk">返回交易驾驶舱</button>
+        </div>
         <div class="account-signal-track" aria-hidden="true">
           <span>CAPITAL</span>
           <i><b :style="{ width: `${positionRatio}%` }"></b></i>
@@ -737,6 +778,10 @@ onBeforeUnmount(() => {
               {{ Number(account.total_profit_loss) >= 0 ? '+' : '' }}{{ formatNumber(account.total_profit_loss) }}
               <small>{{ Number(account.total_return_percent) >= 0 ? '+' : '' }}{{ formatNumber(account.total_return_percent) }}%</small>
             </div>
+          </div>
+          <div class="equity-pnl-split">
+            <span>已实现 <strong :class="riseClass(account.realized_profit_loss)">{{ formatNumber(account.realized_profit_loss) }}</strong></span>
+            <span>浮动 <strong :class="riseClass(account.floating_profit_loss)">{{ formatNumber(account.floating_profit_loss) }}</strong></span>
           </div>
         </article>
 
@@ -860,6 +905,7 @@ onBeforeUnmount(() => {
         @choose-for-sell="chooseForSell"
         @cancel-order="handleCancelOrder"
       />
+      <ReviewWorkspace v-if="activeView === 'review'" />
     </main>
 
     <StockDetailsDrawer

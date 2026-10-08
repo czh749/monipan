@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -151,6 +152,7 @@ class Stock(Base):
     low_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     volume: Mapped[int] = mapped_column(BigInteger, default=0)
     quote_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    quote_source_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -180,6 +182,32 @@ class StockBar(Base):
     turnover: Mapped[Decimal] = mapped_column(Numeric(22, 2), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     stock: Mapped[Stock] = relationship()
+
+
+class StockRawClose(Base):
+    """Unadjusted daily price used for account valuation, separate from chart bars."""
+
+    __tablename__ = "stock_raw_closes"
+    __table_args__ = (
+        UniqueConstraint("stock_id", "trade_date", name="uq_stock_raw_close_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.id"), index=True)
+    trade_date: Mapped[date] = mapped_column(Date, index=True)
+    close_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    source: Mapped[str] = mapped_column(String(16))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RawCloseSync(Base):
+    """Throttle independent unadjusted-history requests per traded stock."""
+
+    __tablename__ = "raw_close_syncs"
+
+    stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.id"), primary_key=True)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class FinancialReport(Base):
@@ -769,6 +797,9 @@ class Order(Base):
     side: Mapped[str] = mapped_column(String(4))
     order_type: Mapped[str] = mapped_column(String(10), default="MARKET")
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    submitted_quote_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    submitted_quote_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    filled_quote_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     quantity: Mapped[int]
     filled_quantity: Mapped[int] = mapped_column(default=0)
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
@@ -792,6 +823,7 @@ class Trade(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     fee: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    filled_quote_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     stock: Mapped[Stock] = relationship()
     order: Mapped[Order] = relationship()
@@ -807,3 +839,62 @@ class AccountTransaction(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     balance_after: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class AccountDailySnapshot(Base):
+    """Rebuildable end-of-day account ledger, valued with cached daily bars."""
+
+    __tablename__ = "account_daily_snapshots"
+    __table_args__ = (
+        UniqueConstraint("account_id", "snapshot_date", name="uq_account_snapshot_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("simulation_accounts.id"), index=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, index=True)
+    cash: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    market_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    total_assets: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    cost_basis: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    realized_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    floating_pnl: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    cash_change: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    market_value_change: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    asset_change: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    asset_change_delta: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    trade_count: Mapped[int] = mapped_column(Integer, default=0)
+    trade_cash_flow: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    fees: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    ledger_cash_delta: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    ledger_consistent: Mapped[bool] = mapped_column(Boolean, default=True)
+    reconciliation_delta: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    valuation_status: Mapped[str] = mapped_column(String(16))
+    missing_symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
+    positions: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TradeNote(Base):
+    __tablename__ = "trade_notes"
+    __table_args__ = (UniqueConstraint("trade_id", name="uq_trade_note_trade"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("simulation_accounts.id"), index=True)
+    trade_id: Mapped[int] = mapped_column(ForeignKey("trades.id"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class DailyReviewNote(Base):
+    __tablename__ = "daily_review_notes"
+    __table_args__ = (
+        UniqueConstraint("account_id", "review_date", name="uq_account_review_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("simulation_accounts.id"), index=True)
+    review_date: Mapped[date] = mapped_column(Date, index=True)
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

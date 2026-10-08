@@ -74,6 +74,7 @@ from app import main as app_main
 from app.main import app
 from app.invites import create_invitations, disable_invitation
 from app.models import (
+    AccountDailySnapshot,
     AccountTransaction,
     AgentEvidence,
     AgentRecommendation,
@@ -81,6 +82,7 @@ from app.models import (
     AnnouncementSyncState,
     AuthSession,
     CompanyAnnouncement,
+    DailyReviewNote,
     FinancialReport,
     InvitationCode,
     MarketIndex,
@@ -94,10 +96,12 @@ from app.models import (
     RegulatoryLetter,
     RegulatoryLetterReply,
     RegulatorySyncState,
+    StockRawClose,
     SimulationAccount,
     Stock,
     StockBar,
     Trade,
+    TradeNote,
     User,
     WatchlistItem,
 )
@@ -110,6 +114,8 @@ from app.services import document_search as document_search_service
 from app.services import fundamentals as fundamentals_service
 from app.services import news as news_service
 from app.services import regulatory as regulatory_service
+from app.services import review as review_service
+from app.services import trading as trading_service
 from app.services.market import history as history_service
 from app.services.news import NewsSearchResult
 from app.stock_pool import STOCK_POOL
@@ -138,6 +144,9 @@ def reset_user_accounts() -> None:
         db.execute(delete(AgentRecommendation))
         db.execute(delete(AgentEvidence))
         db.execute(delete(AgentRun))
+        db.execute(delete(TradeNote))
+        db.execute(delete(DailyReviewNote))
+        db.execute(delete(AccountDailySnapshot))
         db.execute(delete(AccountTransaction))
         db.execute(delete(Trade))
         db.execute(delete(Order))
@@ -265,6 +274,10 @@ def isolated_test_database():
             stock.low_price = base - Decimal("0.02")
             stock.volume = 1_000_000 + index * 100
             stock.updated_at = now
+            stock.quote_source_at = now
+            stock.quote_trade_date = now.replace(tzinfo=UTC).astimezone(
+                trading_service.CHINA_TZ
+            ).date()
         for index, item in enumerate(
             db.scalars(select(MarketIndex).order_by(MarketIndex.display_order)).all()
         ):
@@ -296,6 +309,27 @@ def clean_trading_data():
     reset_user_accounts()
     yield
     reset_user_accounts()
+
+
+@pytest.fixture
+def active_trading_clock(monkeypatch):
+    """Keep order API scenarios at a known open session with a valid quote."""
+    observed = datetime(2026, 7, 27, 2, 0, tzinfo=UTC)
+    monkeypatch.setattr(trading_service, "trading_now", lambda: observed)
+    with SessionLocal() as db:
+        stock = db.scalar(select(Stock).where(Stock.symbol == "600519"))
+        assert stock is not None
+        previous = (stock.quote_source_at, stock.quote_trade_date, stock.updated_at)
+        stock.quote_source_at = observed.replace(tzinfo=None)
+        stock.quote_trade_date = date(2026, 7, 27)
+        stock.updated_at = observed.replace(tzinfo=None)
+        db.commit()
+    yield observed
+    with SessionLocal() as db:
+        stock = db.scalar(select(Stock).where(Stock.symbol == "600519"))
+        assert stock is not None
+        stock.quote_source_at, stock.quote_trade_date, stock.updated_at = previous
+        db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +654,7 @@ def test_register_session_and_logout() -> None:
         assert client.get("/api/auth/me").status_code == 401
 
 
-def test_user_orders_and_watchlist_are_isolated() -> None:
+def test_user_orders_and_watchlist_are_isolated(active_trading_clock) -> None:
     with TestClient(app) as first_client:
         register_test_user(first_client, "first_user")
         assert first_client.post("/api/watchlist/600519").status_code == 201
@@ -1642,10 +1676,12 @@ def test_market_status_is_partial_when_latest_quote_masks_stale_symbols() -> Non
     try:
         with SessionLocal() as db:
             stocks = db.scalars(select(Stock).order_by(Stock.id)).all()
+            original_source_at = stocks[0].quote_source_at
             original_updated_at = stocks[0].updated_at
             try:
                 for index, stock in enumerate(stocks):
-                    stock.updated_at = fresh_at if index < 144 else stale_at
+                    stock.quote_source_at = fresh_at if index < 144 else stale_at
+                    stock.updated_at = stock.quote_source_at
                 db.commit()
 
                 payload = market.market_status_values(db, now=observed_at)
@@ -1656,7 +1692,10 @@ def test_market_status_is_partial_when_latest_quote_masks_stale_symbols() -> Non
                 assert payload["status"] == "partial"
                 assert payload["status_label"] == "行情不完整"
             finally:
-                db.execute(update(Stock).values(updated_at=original_updated_at))
+                db.execute(update(Stock).values(
+                    quote_source_at=original_source_at,
+                    updated_at=original_updated_at,
+                ))
                 db.commit()
     finally:
         with state._lock:
@@ -1687,9 +1726,11 @@ def test_market_status_is_partial_when_latest_refresh_is_incomplete() -> None:
     try:
         with SessionLocal() as db:
             stocks = db.scalars(select(Stock)).all()
+            original_source_at = stocks[0].quote_source_at
             original_updated_at = stocks[0].updated_at
             try:
                 for stock in stocks:
+                    stock.quote_source_at = fresh_at
                     stock.updated_at = fresh_at
                 db.commit()
 
@@ -1700,7 +1741,10 @@ def test_market_status_is_partial_when_latest_refresh_is_incomplete() -> None:
                 assert payload["status"] == "partial"
                 assert "最近一轮仅更新 144/200 只" in payload["status_message"]
             finally:
-                db.execute(update(Stock).values(updated_at=original_updated_at))
+                db.execute(update(Stock).values(
+                    quote_source_at=original_source_at,
+                    updated_at=original_updated_at,
+                ))
                 db.commit()
     finally:
         with state._lock:
@@ -1757,6 +1801,7 @@ def test_market_session_is_aware_of_breaks_and_weekends() -> None:
     assert market.market_session(monday.replace(hour=1, minute=27))[0] == "opening_break"
     assert market.market_session(monday.replace(hour=2))[2] is True
     assert market.market_session(monday.replace(hour=4))[0] == "lunch_break"
+    assert market.market_session(monday.replace(hour=6, minute=57))[0] == "closing_auction"
     assert market.market_session(monday.replace(hour=8))[0] == "closed"
 
     saturday = datetime(2026, 8, 1, 2, tzinfo=UTC)
@@ -2160,7 +2205,7 @@ def test_market_failure_keeps_last_quote(monkeypatch) -> None:
         assert stock.price == original_price
 
 
-def test_buy_is_t1_locked_then_sellable_next_day() -> None:
+def test_buy_is_t1_locked_then_sellable_next_day(active_trading_clock) -> None:
     """
     测试完整的买入→卖出交易流程。
 
@@ -2188,6 +2233,8 @@ def test_buy_is_t1_locked_then_sellable_next_day() -> None:
         assert buy.status_code == 201, buy.text
         # 验证订单状态为已成交
         assert buy.json()["status"] == "FILLED"
+        assert buy.json()["submitted_quote_price"] == buy.json()["price"]
+        assert buy.json()["submitted_quote_at"] == buy.json()["filled_quote_at"]
 
         # ---- 验证买入后的状态 ----
         # 持仓中应有贵州茅台
@@ -2201,7 +2248,9 @@ def test_buy_is_t1_locked_then_sellable_next_day() -> None:
         assert len(client.get("/api/orders").json()) == 1
 
         # 成交记录应有 1 条
-        assert len(client.get("/api/trades").json()) == 1
+        trades = client.get("/api/trades").json()
+        assert len(trades) == 1
+        assert trades[0]["filled_quote_at"] == buy.json()["filled_quote_at"]
 
         # ---- 当日卖出应被 T+1 拒绝 ----
         sell = client.post(
@@ -2216,7 +2265,7 @@ def test_buy_is_t1_locked_then_sellable_next_day() -> None:
         with SessionLocal() as db:
             trade = db.scalar(select(Trade).where(Trade.side == "BUY"))
             assert trade is not None
-            trade.created_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+            trade.created_at = active_trading_clock.replace(tzinfo=None) - timedelta(days=1)
             db.commit()
 
         position = next(
@@ -2243,7 +2292,7 @@ def test_watchlist_add_list_remove() -> None:
         assert client.get("/api/watchlist").json() == []
 
 
-def test_order_preview_and_pending_limit_cancel() -> None:
+def test_order_preview_and_pending_limit_cancel(active_trading_clock) -> None:
     with TestClient(app) as client:
         register_test_user(client)
         stock = client.get("/api/stocks/600519").json()
@@ -2262,6 +2311,7 @@ def test_order_preview_and_pending_limit_cancel() -> None:
         assert preview.status_code == 200, preview.text
         assert preview.json()["allowed"] is True
         assert preview.json()["estimated_fee"] == "5.00"
+        assert preview.json()["quote_source_at"] is not None
 
         created = client.post(
             "/api/orders",
@@ -2277,13 +2327,31 @@ def test_order_preview_and_pending_limit_cancel() -> None:
         assert created.status_code == 201, created.text
         order = created.json()
         assert order["status"] == "PENDING"
+        assert order["submitted_quote_price"] == stock["price"]
+        assert order["submitted_quote_at"] is not None
+        assert order["filled_quote_at"] is None
         assert order["cancelable"] is True
         canceled = client.post(f"/api/orders/{order['order_no']}/cancel")
         assert canceled.status_code == 200
         assert canceled.json()["status"] == "CANCELED"
 
 
-def test_order_idempotency_returns_original_order_and_rejects_key_reuse() -> None:
+def test_order_api_rejects_holiday_before_recording_order(monkeypatch) -> None:
+    holiday = datetime(2026, 9, 25, 2, tzinfo=UTC)
+    monkeypatch.setattr(trading_service, "trading_now", lambda: holiday)
+    with TestClient(app) as client:
+        register_test_user(client)
+        payload = {"symbol": "600519", "side": "BUY", "quantity": 100}
+        preview = client.post("/api/orders/preview", json=payload)
+        assert preview.status_code == 200
+        assert preview.json()["allowed"] is False
+        assert "节假日休市" in preview.json()["blocking_reason"]
+        created = client.post("/api/orders", json=payload, headers=order_headers())
+        assert created.status_code == 400
+        assert client.get("/api/orders").json() == []
+
+
+def test_order_idempotency_returns_original_order_and_rejects_key_reuse(active_trading_clock) -> None:
     with TestClient(app) as client:
         register_test_user(client)
         key = f"retry-{uuid4().hex}"
@@ -3245,3 +3313,211 @@ def test_reject_invalid_lot() -> None:
         )
         # 期望返回 422（Pydantic 校验失败）
         assert response.status_code == 422
+
+
+def test_daily_review_reconciles_trades_cash_positions_and_notes() -> None:
+    """A partial sale must reconcile both P&L components and daily asset movement."""
+    first_day, second_day = date(2026, 9, 28), date(2026, 9, 29)
+    with TestClient(app) as client:
+        username = register_test_user(client)
+        opening_account = client.get("/api/account").json()
+        assert opening_account["realized_profit_loss"] == "0.00"
+        assert opening_account["floating_profit_loss"] == "0.00"
+        with SessionLocal() as db:
+            account = db.scalar(select(SimulationAccount).join(User).where(User.username == username))
+            stock = db.scalar(select(Stock).where(Stock.symbol == "600519"))
+            assert account is not None and stock is not None
+            account.created_at = datetime(2026, 9, 27, 16, 0)
+            account.available_cash = Decimal("999470")
+            db.execute(delete(StockRawClose).where(
+                StockRawClose.stock_id == stock.id,
+                StockRawClose.trade_date.in_([first_day, second_day]),
+            ))
+            for day, close in ((first_day, "11.00"), (second_day, "12.00")):
+                db.add(StockRawClose(
+                    stock_id=stock.id, trade_date=day,
+                    close_price=Decimal(close), source="HISTORY",
+                ))
+            for number, side, quantity, price, amount, fee, time_at, balance in (
+                (1, "BUY", 100, "10.00", "1000.00", "5.00", datetime(2026, 9, 28, 2, 0), "998995.00"),
+                (2, "SELL", 40, "12.00", "480.00", "5.00", datetime(2026, 9, 29, 2, 0), "999470.00"),
+            ):
+                order = Order(
+                    order_no=f"REVIEW-O-{number}", account_id=account.id,
+                    stock_id=stock.id, side=side, quantity=quantity,
+                    filled_quantity=quantity, price=Decimal(price),
+                    fee=Decimal(fee), status="FILLED", order_type="MARKET",
+                    created_at=time_at,
+                )
+                db.add(order)
+                db.flush()
+                db.add(Trade(
+                    trade_no=f"REVIEW-T-{number}", order_id=order.id,
+                    account_id=account.id, stock_id=stock.id, side=side,
+                    quantity=quantity, price=Decimal(price), amount=Decimal(amount),
+                    fee=Decimal(fee), created_at=time_at,
+                ))
+                db.add(AccountTransaction(
+                    account_id=account.id, order_id=order.id,
+                    transaction_type=side,
+                    amount=Decimal("-1005.00") if side == "BUY" else Decimal("475.00"),
+                    balance_after=Decimal(balance), created_at=time_at,
+                ))
+            db.commit()
+            stock_id = stock.id
+
+        try:
+            first = client.get(f"/api/review/days/{first_day}")
+            assert first.status_code == 200, first.text
+            first_snapshot = first.json()["snapshot"]
+            assert first_snapshot["cash"] == "998995.00"
+            assert first_snapshot["market_value"] == "1100.00"
+            assert first_snapshot["total_assets"] == "1000095.00"
+            assert first_snapshot["floating_pnl"] == "95.00"
+
+            second = client.get(f"/api/review/days/{second_day}")
+            assert second.status_code == 200, second.text
+            snapshot = second.json()["snapshot"]
+            assert snapshot["cash"] == "999470.00"
+            assert snapshot["market_value"] == "720.00"
+            assert snapshot["total_assets"] == "1000190.00"
+            assert snapshot["realized_pnl"] == "73.00"
+            assert snapshot["floating_pnl"] == "117.00"
+            assert snapshot["cash_change"] == "475.00"
+            assert snapshot["market_value_change"] == "-380.00"
+            assert snapshot["asset_change"] == "95.00"
+            assert snapshot["asset_change_delta"] == "0.00"
+            assert snapshot["trade_cash_flow"] == "475.00"
+            assert snapshot["ledger_cash_delta"] == "0.00"
+            assert snapshot["ledger_consistent"] is True
+            assert snapshot["reconciliation_delta"] == "0.00"
+            assert snapshot["positions"][0]["quantity"] == 60
+            assert snapshot["positions"][0]["cost_basis"] == "603.00"
+            assert second.json()["trades"][0]["cash_flow"] == "475.00"
+
+            curve = client.get("/api/review/snapshots?days=2")
+            assert curve.status_code == 200, curve.text
+            assert len(curve.json()) == 2
+            assert curve.json()[-1]["date"] == review_service.last_completed_date().isoformat()
+
+            with SessionLocal() as db:
+                transaction = db.scalar(select(AccountTransaction).where(
+                    AccountTransaction.account_id == account.id,
+                    AccountTransaction.transaction_type == "SELL",
+                ))
+                assert transaction is not None
+                transaction.amount = Decimal("474.00")
+                db.commit()
+            inconsistent = client.get(f"/api/review/days/{second_day}").json()["snapshot"]
+            assert inconsistent["ledger_consistent"] is False
+            assert inconsistent["ledger_cash_delta"] == "1.00"
+            with SessionLocal() as db:
+                transaction = db.scalar(select(AccountTransaction).where(
+                    AccountTransaction.account_id == account.id,
+                    AccountTransaction.transaction_type == "SELL",
+                ))
+                transaction.amount = Decimal("475.00")
+                db.commit()
+
+            carried = client.get("/api/review/days/2026-09-30").json()["snapshot"]
+            assert carried["valuation_status"] == "CARRIED"
+            assert carried["positions"][0]["price_date"] == second_day.isoformat()
+            assert carried["asset_change"] == "0.00"
+
+            assert client.put(f"/api/review/days/{second_day}/note", json={"content": "  减仓纪律  "}).json() == {"content": "减仓纪律"}
+            assert client.put("/api/review/trades/REVIEW-T-2/note", json={"content": "  按计划卖出  "}).json() == {"content": "按计划卖出"}
+            review = client.get(f"/api/review/days/{second_day}").json()
+            assert review["daily_note"] == "减仓纪律"
+            assert review["trades"][0]["note"] == "按计划卖出"
+            with SessionLocal() as db:
+                assert db.scalar(select(AccountDailySnapshot).where(
+                    AccountDailySnapshot.account_id == account.id,
+                    AccountDailySnapshot.snapshot_date == second_day,
+                )) is not None
+
+            register_test_user(client)
+            assert client.put("/api/review/trades/REVIEW-T-2/note", json={"content": "越权"}).status_code == 404
+            assert client.get(f"/api/review/days/{second_day}").status_code == 404
+        finally:
+            with SessionLocal() as db:
+                db.execute(delete(StockRawClose).where(
+                    StockRawClose.stock_id == stock_id,
+                    StockRawClose.trade_date.in_([first_day, second_day]),
+                ))
+                db.commit()
+
+
+def test_daily_review_does_not_invent_missing_prices() -> None:
+    review_date = date(2026, 9, 28)
+    with TestClient(app) as client:
+        username = register_test_user(client)
+        with SessionLocal() as db:
+            account = db.scalar(select(SimulationAccount).join(User).where(User.username == username))
+            stock = db.scalar(select(Stock).where(
+                ~select(StockRawClose.id).where(
+                    StockRawClose.stock_id == Stock.id,
+                    StockRawClose.trade_date <= review_date,
+                ).exists(),
+                ~select(StockBar.id).where(
+                    StockBar.stock_id == Stock.id,
+                    StockBar.trade_date == review_date,
+                ).exists(),
+            ))
+            assert account is not None and stock is not None
+            account.created_at = datetime(2026, 9, 27, 16, 0)
+            account.available_cash = Decimal("998995.00")
+            observed = datetime(2026, 9, 28, 2, 0)
+            order = Order(
+                order_no="REVIEW-MISSING-O", account_id=account.id,
+                stock_id=stock.id, side="BUY", quantity=100,
+                filled_quantity=100, price=Decimal("10"), fee=Decimal("5"),
+                status="FILLED", order_type="MARKET", created_at=observed,
+            )
+            db.add(order)
+            db.flush()
+            db.add(Trade(
+                trade_no="REVIEW-MISSING-T", order_id=order.id,
+                account_id=account.id, stock_id=stock.id, side="BUY",
+                quantity=100, price=Decimal("10"), amount=Decimal("1000"),
+                fee=Decimal("5"), created_at=observed,
+            ))
+            db.add(AccountTransaction(
+                account_id=account.id, order_id=order.id, transaction_type="BUY",
+                amount=Decimal("-1005"), balance_after=Decimal("998995"),
+                created_at=observed,
+            ))
+            # A forward-adjusted chart bar is deliberately not a valuation input.
+            db.add(StockBar(
+                stock_id=stock.id, trade_date=review_date,
+                open_price=Decimal("1"), high_price=Decimal("1"),
+                low_price=Decimal("1"), close_price=Decimal("1"),
+            ))
+            db.commit()
+            stock_id = stock.id
+            symbol = stock.symbol
+        try:
+            missing = client.get(f"/api/review/days/{review_date}")
+            assert missing.status_code == 200, missing.text
+            assert missing.json()["snapshot"]["valuation_status"] == "MISSING"
+            assert missing.json()["snapshot"]["missing_symbols"] == [symbol]
+            assert missing.json()["snapshot"]["total_assets"] is None
+            with SessionLocal() as db:
+                db.add(StockRawClose(
+                    stock_id=stock_id, trade_date=review_date,
+                    close_price=Decimal("11"), source="HISTORY",
+                ))
+                db.commit()
+            filled = client.get(f"/api/review/days/{review_date}")
+            assert filled.status_code == 200, filled.text
+            assert filled.json()["snapshot"]["valuation_status"] == "COMPLETE"
+            assert filled.json()["snapshot"]["total_assets"] == "1000095.00"
+            with SessionLocal() as db:
+                assert len(db.scalars(select(AccountDailySnapshot).where(
+                    AccountDailySnapshot.account_id == account.id,
+                    AccountDailySnapshot.snapshot_date == review_date,
+                )).all()) == 1
+        finally:
+            with SessionLocal() as db:
+                db.execute(delete(StockRawClose).where(StockRawClose.stock_id == stock_id, StockRawClose.trade_date == review_date))
+                db.execute(delete(StockBar).where(StockBar.stock_id == stock_id, StockBar.trade_date == review_date))
+                db.commit()

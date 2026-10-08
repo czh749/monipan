@@ -54,6 +54,7 @@ def migrate_database() -> None:
     additive_market_columns = {
         "stocks": {
             "quote_trade_date": "DATE NULL",
+            "quote_source_at": "DATETIME NULL",
         },
         "stock_bars": {
             "prev_close": "NUMERIC(12, 2) NULL",
@@ -92,6 +93,16 @@ def migrate_database() -> None:
                         "idempotency_key VARCHAR(64) NULL"
                     )
                 )
+        for column_name, definition in {
+            "submitted_quote_price": "NUMERIC(12, 2) NULL",
+            "submitted_quote_at": "DATETIME NULL",
+            "filled_quote_at": "DATETIME NULL",
+        }.items():
+            if column_name not in order_columns:
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(f"ALTER TABLE orders ADD COLUMN {column_name} {definition}")
+                    )
 
         order_unique_names = {
             constraint["name"]
@@ -110,6 +121,14 @@ def migrate_database() -> None:
                         "CREATE UNIQUE INDEX uq_order_account_idempotency "
                         "ON orders (account_id, idempotency_key)"
                     )
+                )
+
+    if "trades" in table_names:
+        trade_columns = {column["name"] for column in inspector.get_columns("trades")}
+        if "filled_quote_at" not in trade_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE trades ADD COLUMN filled_quote_at DATETIME NULL")
                 )
 
     if "users" in table_names:
