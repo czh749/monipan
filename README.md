@@ -288,3 +288,13 @@ python -m pytest
 ```
 
 测试环境仍使用独立的临时 SQLite 数据库，不会读写 Docker 中的 MySQL 数据。
+
+前端回归测试与构建：
+
+```powershell
+cd frontend
+pnpm test
+pnpm build
+```
+
+前端测试覆盖委托预览、确认、撤单、会话切换与动画清理，使用模拟 API，不会提交真实请求；构建同时执行 Vue 和 TypeScript 类型检查。
