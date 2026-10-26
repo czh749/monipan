@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-25",
+  "source": "User-pasted Tencent Cloud web terminal output",
+  "assistant_direct_server_access": false,
+  "artifact_path": "/home/ubuntu/monipan-monitor-20261025.py",
+  "expected_artifact_sha256": "2cf33bd53ef6e60e4aa884bcb191f4c31ce27d660d936bd999d457a83a68d618",
+  "checksum_result_reported": "OK",
+  "event": "PREFLIGHT_READ_ONLY",
+  "checks": {
+    "containers": {"ok": true, "detail": "healthy"},
+    "edge": {"ok": true, "detail": "nginx_active_required"},
+    "readiness": {"ok": true, "detail": "ready"},
+    "disk": {"ok": true, "detail": "space_ok"},
+    "backup_timer": {"ok": true, "detail": "timer_enabled_active_required"},
+    "backup_result": {"ok": true, "detail": "success"},
+    "backup_age": {"ok": true, "detail": "age_hours=16.96"}
+  },
+  "all_checks_passed": true,
+  "installation": "awaiting_user_execution",
+  "smtp_acceptance": "not_tested",
+  "actual_email_delivery": "not_verified",
+  "monitor_timer_enablement": "not_verified",
+  "production_release_repeated": false,
+  "stage0_status": "in_progress"
+}

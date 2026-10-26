@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-25",
+  "scope": "Local lightweight monitoring preparation only",
+  "channel": "smtp_email",
+  "interval_minutes": 5,
+  "consecutive_failures": 2,
+  "consecutive_recoveries": 2,
+  "continuous_fault_reminder_hours": 24,
+  "artifact": {
+    "workspace_path": "D:/monipan/.docker/monipan-monitor-20261025.py",
+    "desktop_path": "C:/Users/Czh13/Desktop/monipan/monipan-monitor-20261025.py",
+    "bytes": 23571,
+    "sha256": "2cf33bd53ef6e60e4aa884bcb191f4c31ce27d660d936bd999d457a83a68d618",
+    "desktop_matches_workspace": true
+  },
+  "validation": {
+    "command": "backend/.venv/Scripts/python.exe -m pytest backend/tests/test_production_monitor.py -q -p no:cacheprovider --basetemp=.docker/pytest-monitor-delivery-20261025",
+    "passed": 78,
+    "failed": 0,
+    "source_and_upload_artifact_both_exercised": true,
+    "python38_syntax_checked": true,
+    "linux_permissions_and_systemd": "not_live_tested",
+    "docker_systemd_http_smtp": "controlled_substitutes",
+    "preexisting_git_visible_files_unchanged": 70,
+    "intentional_preexisting_document_updates": [
+      "docs/production-hardening.md",
+      "docs/stage0-alerting-handoff-2026-10-25.md"
+    ],
+    "missing_or_unexpected_preexisting_file_changes": 0
+  },
+  "production": {
+    "server_preflight": "passed_from_user_web_terminal_output",
+    "server_preflight_evidence": "docs/evidence/production-monitor-server-preflight-2026-10-25.json",
+    "installation": "installed_runtime_executed_full_systemd_installation_not_reported",
+    "smtp_credentials": "not_collected_in_chat",
+    "smtp_acceptance": "test_failed_SMTPServerDisconnected_phase_unknown",
+    "smtp_failure_evidence": "docs/evidence/production-monitor-smtp-failure-2026-10-25.json",
+    "qq_config_diagnostic": "stored_authorization_code_length_63_instead_of_16",
+    "qq_config_diagnostic_evidence": "docs/evidence/production-monitor-qq-config-diagnostic-2026-10-25.json",
+    "latest_user_feedback_evidence": "docs/evidence/production-monitor-user-feedback-2026-10-26.json",
+    "actual_test_failure_and_recovery_delivery": "not_verified",
+    "monitor_timer": "enablement_not_reported",
+    "existing_production_release_repeated": false,
+    "existing_backup_installation_repeated": false
+  },
+  "stage0_status": "in_progress"
+}

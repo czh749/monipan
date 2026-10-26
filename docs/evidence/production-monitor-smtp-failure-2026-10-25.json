@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-25",
+  "source": "User-pasted Tencent Cloud web terminal output",
+  "command": "python3 -u /usr/local/lib/monipan-monitor/monitor.py test-mail",
+  "observed_events": [
+    {"event": "SMTP_SEND_FAILED", "checks": ["readiness"], "error_type": "SMTPServerDisconnected"},
+    {"event": "MONITOR_FAILED", "error_type": "MonitorError", "reason": "Test SMTP failed"}
+  ],
+  "interpretation": {
+    "installed_runtime_was_executed": true,
+    "private_configuration_validation_reached": true,
+    "full_systemd_installation_status": "not_reported",
+    "smtp_test": "failed",
+    "disconnect_phase": "unknown",
+    "credentials_incorrect": "not_proven",
+    "actual_email_delivery": "not_verified",
+    "monitor_timer_enablement": "not_reported"
+  },
+  "next_step": "Single sanitized configuration/SMTP connect/EHLO/login diagnostic; no configuration writes or test emails",
+  "production_service_changes": "none_from_diagnostic",
+  "stage0_status": "in_progress"
+}

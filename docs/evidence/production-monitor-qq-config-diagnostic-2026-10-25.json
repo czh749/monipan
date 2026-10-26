@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-25",
+  "source": "User-pasted Tencent Cloud web terminal diagnostic output",
+  "observed": [
+    {"qq_settings_ok": true, "port": 465, "mode": "ssl", "auth_code_length": 63},
+    {"failed_stage": "CONFIG", "error_type": "ValueError", "smtp_code": null}
+  ],
+  "conclusions": {
+    "qq_host_port_tls_combination": "matches_expected_configuration",
+    "stored_auth_code_length": "invalid_for_QQ_16_character_code",
+    "diagnostic_reached_network_or_login": false,
+    "original_smtp_disconnect_root_cause": "not_yet_fully_proven",
+    "smtp_success_and_actual_delivery": "not_verified"
+  },
+  "next_step": "Replace only smtp.password via hidden input, require 16 non-whitespace characters before atomic private write, then repeat test-mail",
+  "secrets_in_evidence": false,
+  "monitor_timer_enablement": "not_reported"
+}
