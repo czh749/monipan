@@ -1,6 +1,7 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 sqlalchemy>=2.0
+alembic>=1.16,<2
 PyMySQL[rsa]>=1.1,<2
 argon2-cffi>=23.1,<26
 pydantic>=2.9

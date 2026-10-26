@@ -44,9 +44,9 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 def migrate_database() -> None:
     """Apply the small additive migrations needed by existing databases.
 
-    The project intentionally has no migration framework yet. New tables are
-    handled by ``create_all``; this helper applies the small set of additive or
-    widening changes required by existing persistent databases.
+    Legacy compatibility helper retained for inspecting old releases and tests.
+    Application startup no longer invokes it. Current databases must use the
+    checked versioned migration commands in ``app.schema``.
     """
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())

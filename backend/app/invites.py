@@ -7,12 +7,14 @@ from secrets import token_urlsafe
 from sqlalchemy import select
 
 from .auth import hash_invite_code, utcnow
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal, engine
 from .models import InvitationCode
+from .schema import require_current
 
 
 def create_invitations(*, count: int, expires_days: int, label: str | None) -> list[str]:
-    Base.metadata.create_all(bind=engine)
+    with engine.connect() as connection:
+        require_current(connection)
     now = utcnow()
     expires_at = now + timedelta(days=expires_days)
     raw_codes: list[str] = []
@@ -35,7 +37,8 @@ def create_invitations(*, count: int, expires_days: int, label: str | None) -> l
 
 
 def disable_invitation(raw_code: str) -> bool:
-    Base.metadata.create_all(bind=engine)
+    with engine.connect() as connection:
+        require_current(connection)
     with SessionLocal() as db:
         invitation = db.scalar(
             select(InvitationCode).where(

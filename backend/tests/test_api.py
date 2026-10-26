@@ -54,6 +54,7 @@ os.environ["MONIPAN_DATABASE_URL"] = (
 
 from app import auth as app_auth
 from app.database import Base, SessionLocal, engine
+from app.schema import upgrade_database
 from app.auth import hash_invite_code
 from app.agent import (
     AgentEvidenceRecord,
@@ -258,7 +259,7 @@ def minimal_text_pdf(text: str = "Official risk notice") -> bytes:
 @pytest.fixture(scope="session", autouse=True)
 def isolated_test_database():
     """为整轮测试创建临时数据库，并在结束后清理数据库及 WAL 文件。"""
-    Base.metadata.create_all(bind=engine)
+    upgrade_database(engine)
     with SessionLocal() as db:
         seed_database(db)
         # 仅在临时测试库写入固定测试报价；生产代码不包含随机行情。
@@ -401,7 +402,7 @@ def test_runtime_configuration_validation_runs_during_lifespan(monkeypatch) -> N
     def validate_once():
         nonlocal calls
         calls += 1
-        return SimpleNamespace(environment="test")
+        return SimpleNamespace(environment="test", production=False)
 
     monkeypatch.setattr(app_main, "validate_runtime_configuration", validate_once)
     with TestClient(app):
