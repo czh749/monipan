@@ -44,6 +44,7 @@ services:
       MONIPAN_HISTORY_FAILURE_INTERVAL: "20"
       # Local HTTP deployment. Set to "1" together with HTTPS in production.
       MONIPAN_COOKIE_SECURE: ${MONIPAN_COOKIE_SECURE:-0}
+      FORWARDED_ALLOW_IPS: ${MONIPAN_FORWARDED_ALLOW_IPS:-127.0.0.1}
       MONIPAN_SESSION_DAYS: ${MONIPAN_SESSION_DAYS:-7}
       MONIPAN_REGISTER_IP_LIMIT: ${MONIPAN_REGISTER_IP_LIMIT:-3}
       MONIPAN_REGISTER_WINDOW_SECONDS: ${MONIPAN_REGISTER_WINDOW_SECONDS:-3600}
@@ -96,6 +97,10 @@ services:
   frontend:
     build:
       context: ./frontend
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/security-headers.conf:/etc/nginx/monipan-security-headers.conf:ro
+      - ./frontend/proxy-trust.conf:/etc/nginx/monipan-proxy-trust.conf:ro
     ports:
       - "127.0.0.1:8080:80"
     depends_on:
