@@ -1,0 +1,19 @@
+[Unit]
+Description=MoniPan checked MySQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/monipan
+Environment=COMPOSE_PROJECT_NAME=monipan
+Environment=MONIPAN_BACKUP_DIR=/opt/monipan/backups/daily
+Environment=MONIPAN_BACKUP_RETENTION_DAYS=14
+UMask=0077
+ExecStart=/bin/sh /opt/monipan/scripts/backup_mysql.sh
+TimeoutStartSec=30min
+Nice=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=monipan-backup
