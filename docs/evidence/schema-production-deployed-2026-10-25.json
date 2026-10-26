@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-25",
+  "source": "user_returned_server_terminal_output",
+  "artifact_path": "/home/ubuntu/monipan-schema-deploy-20261025.py",
+  "artifact_sha256": "8180dddd780b1c20a2e6611368e3675d2e248b79cfacf54295b2a5bf9688eadd",
+  "artifact_checksum_verified": true,
+  "deployment_plan": "/opt/monipan/backups/schema-release-20261018-kn9o5neq/production-20261025-5962df49b371ef9d9236d88e/deployment-plan.json",
+  "production_backend_image": "sha256:89a426a296110d25c620a68caae2253c4b8ef71551f8ea5696ee3718a92fcd46",
+  "baseline_revision": "20261018_01",
+  "markers": [
+    "PRODUCTION_BASELINE_REGISTRATION_STARTING",
+    "PRODUCTION_BASELINE_REGISTERED",
+    "BACKEND_SWITCH_STARTING",
+    "PRODUCTION_ALEMBIC_RELEASE_VERIFIED"
+  ],
+  "production_baseline_registered": true,
+  "production_backend_switched": true,
+  "checks_implied_by_verified_script_success": [
+    "reviewed backend source files synchronized",
+    "backend image matches the expected immutable candidate and is healthy",
+    "production schema revision equals 20261018_01",
+    "frontend nginx syntax check and reload succeeded",
+    "local and public paths /, /readyz, /api/auth/me, /docs returned expected statuses",
+    "public HTTPS origin, HSTS, enforced CSP, nosniff and frame headers checked",
+    "protected frontend and mysql container identities and health preserved",
+    "protected production configuration file fingerprints unchanged"
+  ],
+  "new_backend_container_id_reported": false,
+  "real_user_passwords_tested": false,
+  "browser_ui_tested": false,
+  "production_failure_rollback_exercised": false,
+  "stage0_fully_accepted": false
+}

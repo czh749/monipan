@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-25",
+  "source": "user_returned_server_terminal_output",
+  "artifact_path": "/home/ubuntu/monipan-schema-retry-20261025.py",
+  "artifact_sha256": "8009fc49c962dacc5351e1e559bae70feb08f0b3f13b5d8a3cfc3d9b5aa6b4c9",
+  "artifact_checksum_verified": true,
+  "candidate_image": "sha256:89a426a296110d25c620a68caae2253c4b8ef71551f8ea5696ee3718a92fcd46",
+  "release_state": "/opt/monipan/backups/schema-release-20261018-kn9o5neq/release-state.json",
+  "restore_state": "/opt/monipan/backups/schema-release-20261018-kn9o5neq/drill-backup/restore-run-wv2ih0o7/restore-state.json",
+  "automated_check_seconds": 37.01,
+  "markers": [
+    "RESTORE_APPLICATION_OK",
+    "TEMPORARY_RESOURCES_CLEANED",
+    "FINAL_IMAGE_REHEARSAL_OK",
+    "PRODUCTION_CONTAINERS_UNCHANGED",
+    "PRODUCTION_SCHEMA_NOT_ADOPTED",
+    "CANDIDATE_READY_PRODUCTION_NOT_DEPLOYED"
+  ],
+  "probe_report": {
+    "status": "passed",
+    "dialect": "mysql",
+    "baseline_revision": "20261018_01",
+    "existing_database_adopted": true,
+    "business_tables_fingerprinted": 31,
+    "business_rows_unchanged_by_adoption": true,
+    "supporting_indexes_classified": 23,
+    "check_constraints_verified": 14,
+    "fresh_database_upgrade": "passed",
+    "application": {
+      "status": "passed",
+      "restored_accounts_read": 9,
+      "inactive_accounts_skipped": 0,
+      "agent_runs_read_and_isolated": 3,
+      "foreign_keys_checked": 37,
+      "cash_ledger_reconciled_accounts": 9,
+      "position_quantity_replay": "passed",
+      "synthetic_register_login_logout": "passed",
+      "original_tables_fingerprinted": 29,
+      "runtime_tables_excluded_from_immutability": [
+        "auth_sessions",
+        "rate_limit_counters",
+        "rate_limit_leases"
+      ],
+      "original_rows_unchanged": true,
+      "original_user_passwords_tested": false,
+      "browser_ui_tested": false,
+      "note": "Application API smoke and clone ledger checks; no full-host disaster recovery claim"
+    },
+    "production_schema_modified": false,
+    "candidate_files_verified": 154,
+    "source_overlay_applied": false
+  },
+  "production_deployed": false,
+  "temporary_resources_cleaned": true
+}

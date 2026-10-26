@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-25",
+  "source": "user_returned_server_terminal_output",
+  "artifact_path": "/home/ubuntu/monipan-schema-deploy-20261025.py",
+  "artifact_sha256": "8180dddd780b1c20a2e6611368e3675d2e248b79cfacf54295b2a5bf9688eadd",
+  "artifact_checksum_verified": true,
+  "deployment_plan": "/opt/monipan/backups/schema-release-20261018-kn9o5neq/production-20261025-5962df49b371ef9d9236d88e/deployment-plan.json",
+  "fresh_backup": "/opt/monipan/backups/schema-release-20261018-kn9o5neq/production-20261025-5962df49b371ef9d9236d88e/database/monipan-20261025T065725Z.sql.gz",
+  "fresh_backup_sha256": "5d0dc866c89c59951365969416bac90d303f75a975c11c38b9d13b49c960b276",
+  "markers": [
+    "FRESH_PRODUCTION_BACKUP_STARTING",
+    "PRODUCTION_SCHEMA_READ_ONLY_CHECK_STARTING",
+    "PRODUCTION_RELEASE_PREPARED_NOT_DEPLOYED"
+  ],
+  "production_schema_read_only_check_passed": true,
+  "production_baseline_registered": false,
+  "production_backend_switched": false
+}

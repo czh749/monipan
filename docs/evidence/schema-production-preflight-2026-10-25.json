@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-25",
+  "source": "user_returned_server_terminal_output",
+  "marker": "PRODUCTION_PREFLIGHT_OK_READ_ONLY",
+  "status": "candidate_image_verified_production_not_deployed",
+  "old_image": "sha256:2bc78105792958fe58f54438a4d892067f28cb9f62d9ee247515d09136a2b2e2",
+  "old_image_tag": "monipan-backend:before-schema-20261018-da89fb699afd45fa19b58970",
+  "candidate_image": "sha256:89a426a296110d25c620a68caae2253c4b8ef71551f8ea5696ee3718a92fcd46",
+  "candidate_image_tag": "monipan-backend:schema-20261018_01-permissions-9468f7b19e80b6942e43ed72",
+  "candidate_context": "/opt/monipan/backups/schema-release-20261018-kn9o5neq/permission-retry-9468f7b19e80b6942e43ed72/context",
+  "release_context_sha256": "3896cd7cb5d61a69b1ea16d662fb8f9e47244f52adecd266e2c6c7e4448db052",
+  "compose_version": "2.32.4",
+  "production_containers": {
+    "backend": {
+      "id": "90bff4e0bb0dd8ecb6908d22afb244b7c2b0d1a145c4c587d9addde226ed4d16",
+      "health": "healthy",
+      "networks": ["monipan_default"]
+    },
+    "frontend": {
+      "id": "2f5d1dcdb4fe9d0df363f360442c79dbc4251567525fe6088d5a8cecb1a66aaa",
+      "health": "healthy",
+      "networks": ["monipan_default"]
+    },
+    "mysql": {
+      "id": "ff0cbcefc737df9bfd1f4088f66f5a54a4dfcc144d3f8248194c300e1d446861",
+      "health": "healthy",
+      "networks": ["monipan_default"]
+    }
+  },
+  "backend_compose": {
+    "image": null,
+    "has_build": true,
+    "has_custom_command": false,
+    "has_ports": false,
+    "volumes": [],
+    "healthcheck_uses_readyz": true,
+    "stop_grace_period": "5m0s"
+  },
+  "production_modified_by_inspection": false
+}
