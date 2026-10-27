@@ -83,15 +83,16 @@ onBeforeUnmount(() => ticketMotion?.revert())
   <aside ref="ticketRoot" class="panel order-panel">
     <template v-if="stock">
       <span class="ticket-signal-rail" aria-hidden="true"><i></i></span>
-      <div class="ticket-label"><span>ORDER TICKET</span><strong>{{ orderType === 'MARKET' ? '市价委托' : '限价委托' }}</strong></div>
+      <div class="ticket-label"><span>{{ stock.research_only ? 'RESEARCH' : 'ORDER TICKET' }}</span><strong>{{ stock.research_only ? '研究标的' : orderType === 'MARKET' ? '市价委托' : '限价委托' }}</strong></div>
       <div class="stock-head">
         <div><span>{{ stock.symbol }}</span><h2>{{ stock.name }}</h2><small>{{ stock.industry }}</small></div>
         <div class="stock-price" :class="riseClass(stock.change)">
-          <strong>{{ formatNumber(stock.price) }}</strong>
-          <span>{{ Number(stock.change) >= 0 ? '+' : '' }}{{ formatNumber(stock.change) }} / {{ formatNumber(stock.change_percent) }}%</span>
+          <strong>{{ quoteNumber(stock.price) }}</strong>
+          <span v-if="stock.quote_status !== 'pending'">{{ Number(stock.change) >= 0 ? '+' : '' }}{{ formatNumber(stock.change) }} / {{ formatNumber(stock.change_percent) }}%</span>
         </div>
       </div>
-      <div class="quote-provenance">
+      <div v-if="stock.quote_status === 'pending'" class="ticket-blocker">等待首次行情，失败时会自动退避重试。财务与公告可在详情中按需查看。</div>
+      <div v-else class="quote-provenance">
         <span class="status-dot"></span>
         <strong>{{ marketStatus?.provider_label ?? '东方财富' }} · 真实行情</strong>
         <div class="quote-times">
@@ -102,7 +103,7 @@ onBeforeUnmount(() => ticketMotion?.revert())
         </div>
       </div>
       <div class="quote-strip">
-        <span>昨收<strong>{{ formatNumber(stock.prev_close) }}</strong></span>
+        <span>昨收<strong>{{ quoteNumber(stock.prev_close) }}</strong></span>
         <span>最高<strong :class="Number(stock.high_price) > 0 ? 'rise' : 'muted'">{{ quoteNumber(stock.high_price) }}</strong></span>
         <span>最低<strong :class="Number(stock.low_price) > 0 ? 'fall' : 'muted'">{{ quoteNumber(stock.low_price) }}</strong></span>
       </div>
@@ -112,6 +113,8 @@ onBeforeUnmount(() => ticketMotion?.revert())
         <div class="range-labels"><span>LOW</span><b>{{ formatNumber(priceRangePosition) }}%</b><span>HIGH</span></div>
       </div>
 
+      <p v-if="stock.research_only" class="ticket-blocker">仅研究 · 该股票尚未开放模拟交易，可打开详情查看 K 线、财务和公告。</p>
+      <template v-else>
       <div class="side-switch">
         <button :class="{ active: side === 'BUY' }" @click="emit('update:side', 'BUY')">买入</button>
         <button :class="{ active: side === 'SELL' }" @click="emit('update:side', 'SELL')">卖出</button>
@@ -175,6 +178,7 @@ onBeforeUnmount(() => ticketMotion?.revert())
         {{ submitting ? '提交中…' : previewLoading ? '校验中…' : `复核并${side === 'BUY' ? '买入' : '卖出'} ${stock.name}` }}
       </button>
       <p class="trade-note">仅交易日连续竞价时段可提交委托；有效行情下的市价单按快照价模拟成交。限价单当日有效，买入股票当日不可卖出。</p>
+      </template>
     </template>
   </aside>
 </template>

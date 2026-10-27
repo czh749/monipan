@@ -2,7 +2,7 @@
 import { gsap } from 'gsap'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { MarketIndex, MarketStatus, Stock } from '../types'
-import { compactTurnover, formatNumber, fullDateTime, relativeTime, riseClass, shortDateTime, utcDate } from '../utils/formatters'
+import { compactTurnover, formatNumber, quoteNumber, fullDateTime, relativeTime, riseClass, shortDateTime, utcDate } from '../utils/formatters'
 
 const props = defineProps<{
   selectedStock?: Stock
@@ -105,8 +105,9 @@ onBeforeUnmount(() => focusQuoteMotion?.revert())
       <span>焦点标的</span>
       <strong>{{ selectedStock.symbol }}</strong>
       <b>{{ selectedStock.name }}</b>
-      <em :class="riseClass(selectedStock.change)">{{ formatNumber(selectedStock.price) }}</em>
-      <small :class="riseClass(selectedStock.change)">
+      <em :class="riseClass(selectedStock.change)">{{ quoteNumber(selectedStock.price) }}</em>
+      <small v-if="selectedStock.quote_status === 'pending'">等待首次行情</small>
+      <small v-else :class="riseClass(selectedStock.change)">
         {{ Number(selectedStock.change_percent) >= 0 ? '+' : '' }}{{ formatNumber(selectedStock.change_percent) }}%
       </small>
       <button

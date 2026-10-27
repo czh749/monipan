@@ -18,14 +18,17 @@ export function useMarketData() {
   let timer: number | undefined
   let stopped = true
   let refreshPromise: Promise<void> | null = null
+  let generation = 0
 
   async function performRefresh() {
+    const id = generation
     const results = await Promise.allSettled([
       api.stocks(),
       api.marketStatus(),
       api.marketIndices(),
     ])
     const [stockResult, statusResult, indexResult] = results
+    if (id !== generation) return
 
     if (stockResult.status === 'fulfilled') stocks.value = stockResult.value
     if (statusResult.status === 'fulfilled') marketStatus.value = statusResult.value
@@ -38,10 +41,11 @@ export function useMarketData() {
 
   function refreshMarket() {
     if (refreshPromise) return refreshPromise
-    refreshPromise = performRefresh().finally(() => {
-      refreshPromise = null
+    const job: Promise<void> = performRefresh().finally(() => {
+      if (refreshPromise === job) refreshPromise = null
     })
-    return refreshPromise
+    refreshPromise = job
+    return job
   }
 
   function scheduleNextRefresh() {
@@ -70,6 +74,13 @@ export function useMarketData() {
   }
 
   function stopMarketPolling() {
+    generation++
+    refreshPromise = null
+    stocks.value = []
+    marketStatus.value = null
+    marketIndices.value = []
+    error.value = ''
+    loading.value = true
     stopped = true
     window.clearTimeout(timer)
     document.removeEventListener('visibilitychange', handleVisibilityChange)

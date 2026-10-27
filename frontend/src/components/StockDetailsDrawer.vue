@@ -741,7 +741,8 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <div class="drawer-quote">
+        <p v-if="stock.research_only" class="research-notice">仅研究 · 尚未开放模拟交易<span v-if="stock.quote_status === 'pending'"> · 等待首次行情，财务与公告仍可按需查看</span></p>
+        <div v-if="stock.quote_status !== 'pending'" class="drawer-quote">
           <div :class="riseClass(stock.change)">
             <strong>{{ formatNumber(stock.price) }}</strong>
             <span>{{ Number(stock.change_percent) >= 0 ? '+' : '' }}{{ formatNumber(stock.change_percent) }}%</span>
@@ -1295,7 +1296,7 @@ onBeforeUnmount(() => {
           <div><span>浮动盈亏</span><strong :class="riseClass(position.profit_loss)">{{ Number(position.profit_loss) >= 0 ? '+' : '' }}{{ formatNumber(position.profit_loss) }}</strong></div>
         </section>
 
-        <footer class="drawer-actions">
+        <footer v-if="!stock.research_only" class="drawer-actions">
           <button class="drawer-buy" @click="emit('prepareOrder', 'BUY')">装载买入票据</button>
           <button class="drawer-sell" :disabled="!position?.sellable_quantity" @click="emit('prepareOrder', 'SELL')">装载卖出票据</button>
         </footer>
