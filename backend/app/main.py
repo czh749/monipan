@@ -60,6 +60,7 @@ from .services.trading import expire_pending_orders
 from .services.review import rebuild_daily_snapshots
 from .services.market.constants import CHINA_TZ
 from .services.market.raw_close import backfill_raw_closes_once
+from .services.market.tick import tick_pending_research
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -103,6 +104,11 @@ def expire_orders_once() -> int:
     """Close day orders even when no market refresh runs after 15:00."""
     with SessionLocal() as db:
         return expire_pending_orders(db)
+
+
+def refresh_pending_research_once() -> int:
+    with SessionLocal() as db:
+        return tick_pending_research(db)
 
 
 def refresh_daily_snapshots_once() -> int:
@@ -173,7 +179,15 @@ async def market_loop() -> None:
             )
         else:
             sleep_seconds = interval if session_open else 60
-        await asyncio.sleep(sleep_seconds)
+        # One executor, including outside trading hours: newly added identities
+        # get a bounded first quote without waiting for the next session.
+        deadline = asyncio.get_running_loop().time() + sleep_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(min(20, max(0, deadline - asyncio.get_running_loop().time())))
+            try:
+                await asyncio.to_thread(refresh_pending_research_once)
+            except Exception:
+                logger.warning("新增研究股票行情暂未就绪，五分钟后重试", exc_info=True)
 
 
 def backfill_history_once(after_stock_id: int) -> tuple[int, str | None, bool]:

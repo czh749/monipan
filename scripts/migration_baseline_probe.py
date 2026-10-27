@@ -9,8 +9,11 @@ def run_migration_probe(*, allow_sqlite=False):
     from sqlalchemy import MetaData, create_engine, inspect, select, text
     from sqlalchemy.engine import make_url
     from app.database import engine
-    from app.schema import BASELINE, adopt_baseline, baseline_check, require_current, upgrade_database
+    from app.schema import BASELINE, adopt_baseline, baseline_check, head_revision, require_current, upgrade_database
     from restore_application_probe import run_probe
+
+    if head_revision() != BASELINE:
+        raise RuntimeError("Stage 0 probe supports the frozen baseline only; use the Stage 1 migration rehearsal")
 
     url = make_url(os.environ["MONIPAN_DATABASE_URL"])
     sqlite = url.drivername.startswith("sqlite")

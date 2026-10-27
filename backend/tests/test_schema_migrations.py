@@ -14,7 +14,7 @@ from app.migrations.check_expressions import expression_tree
 from app.migrations.frozen_v04 import metadata
 from app.schema import (BASELINE, SchemaStateError, adopt_baseline, baseline_check, configuration,
                         current_revisions, prepare_database, require_current, upgrade_database)
-from app.schema_audit import model_schema
+from app.schema_audit import model_schema, audit
 
 
 @pytest.fixture
@@ -27,7 +27,10 @@ def database():
 def test_frozen_baseline_matches_v04_for_both_supported_dialects():
     frozen = metadata()
     for dialect in (mysql.dialect(), sqlite.dialect()):
-        assert model_schema(frozen, dialect) == model_schema(Base.metadata, dialect)
+        current = model_schema(Base.metadata, dialect)
+        current.pop("security_catalog_entries")
+        current["stocks"]["columns"].pop("research_only")
+        assert model_schema(frozen, dialect) == current
     assert len(frozen.tables) == 31
 
 
@@ -36,15 +39,13 @@ def test_empty_database_upgrades_to_a_checked_head_and_repeated_upgrade_is_safe(
     upgrade_database(database)
     with database.connect() as connection:
         require_current(connection)
-        report = baseline_check(connection)
-        assert current_revisions(connection) == (BASELINE,)
-    assert report["status"] == "baseline_compatible"
-    assert report["check_constraints_inspected"] == 14
-    assert report["adoption_problems"] == []
+        report = audit(connection, model_schema(Base.metadata, connection.dialect))
+        assert current_revisions(connection) == ("20261026_02",)
+    assert report["differences"] == []
 
 
 def test_existing_business_data_adoption_only_writes_version_metadata(database):
-    Base.metadata.create_all(database)
+    metadata().create_all(database)
     with Session(database) as session:
         session.add(models.User(username="migration_fixture", status="ACTIVE"))
         session.commit()
@@ -62,15 +63,51 @@ def test_existing_business_data_adoption_only_writes_version_metadata(database):
         assert session.scalars(select(models.User.username)).all() == ["migration_fixture"]
 
 
+def test_stage1_upgrade_preserves_every_original_column_and_cash_position_order_trade(tmp_path):
+    # Use the meaningful two-account ledger fixture, strip the Stage 1 additions
+    # to reproduce a versioned production baseline, then compare all old columns.
+    import ast
+    from pathlib import Path
+    from sqlalchemy import MetaData
+    tree = ast.parse(Path(__file__).with_name("test_restore_application.py").read_text(encoding="utf-8"))
+    source = next(ast.literal_eval(item.value) for item in tree.body if isinstance(item, ast.Assign)
+                  and any(isinstance(n, ast.Name) and n.id == "FIXTURE" for n in item.targets))
+    source = source.replace("upgrade_database(engine)\n", "Base.metadata.create_all(engine)\n")
+    # The fixture imports global configuration, so run it against this test's
+    # engine by substituting only its database import.
+    database = create_engine("sqlite:///" + (tmp_path / "baseline.db").as_posix())
+    source = source.replace("from app.database import Base, engine, SessionLocal", "")
+    exec(source, {"Base": Base, "engine": database, "SessionLocal": sessionmaker(bind=database)})
+    with database.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE security_catalog_entries")
+        connection.exec_driver_sql("ALTER TABLE stocks DROP COLUMN research_only")
+    frozen = MetaData()
+    frozen.reflect(bind=database)
+    def snapshot():
+        with database.connect() as connection:
+            return {name: connection.execute(select(table).order_by(*table.primary_key.columns)).all()
+                    for name, table in frozen.tables.items()}
+    before = snapshot()
+    adopt_baseline(database)
+    upgrade_database(database)
+    upgrade_database(database)
+    assert snapshot() == before
+    with database.connect() as connection:
+        require_current(connection)
+        assert connection.scalar(text("SELECT research_only FROM stocks LIMIT 1")) == 0
+        assert audit(connection, model_schema(Base.metadata, connection.dialect))["differences"] == []
+    database.dispose()
+
+
 def test_unversioned_existing_database_cannot_accidentally_run_initial_upgrade(database):
-    Base.metadata.create_all(database)
+    metadata().create_all(database)
     with pytest.raises(SchemaStateError, match="adopt-baseline"):
         upgrade_database(database)
     assert "alembic_version" not in inspect(database).get_table_names()
 
 
 def test_column_drift_prevents_version_creation(database):
-    Base.metadata.create_all(database)
+    metadata().create_all(database)
     with database.begin() as connection:
         connection.exec_driver_sql("ALTER TABLE users DROP COLUMN password_hash")
     with pytest.raises(SchemaStateError, match="Baseline check failed"):
@@ -89,7 +126,7 @@ def test_missing_check_constraint_prevents_version_creation(database):
 
 
 def test_unknown_view_requires_review_and_is_preserved(database):
-    Base.metadata.create_all(database)
+    metadata().create_all(database)
     with database.begin() as connection:
         connection.exec_driver_sql("CREATE VIEW migration_fixture_view AS SELECT id FROM users")
     with pytest.raises(SchemaStateError):
@@ -101,7 +138,7 @@ def test_production_startup_cannot_initialize_or_adopt_a_database(database):
     with pytest.raises(SchemaStateError):
         prepare_database(database, production=True)
     assert inspect(database).get_table_names() == []
-    Base.metadata.create_all(database)
+    metadata().create_all(database)
     with pytest.raises(SchemaStateError):
         prepare_database(database, production=True)
     assert "alembic_version" not in inspect(database).get_table_names()
@@ -116,15 +153,15 @@ def test_empty_development_database_uses_the_versioned_baseline(database):
 def test_baseline_downgrade_cannot_delete_business_tables(database):
     upgrade_database(database)
     with database.begin() as connection:
-        with pytest.raises(RuntimeError, match="intentionally blocked"):
+        with pytest.raises(RuntimeError, match="data-preserving rollback"):
             command.downgrade(configuration(connection, "upgrade"), "base")
-    assert len(inspect(database).get_table_names()) == 32
+    assert len(inspect(database).get_table_names()) == 33
     with database.connect() as connection:
         require_current(connection)
 
 
 def test_raw_stamp_command_cannot_bypass_the_preflight(database):
-    Base.metadata.create_all(database)
+    metadata().create_all(database)
     with database.begin() as connection:
         with pytest.raises(RuntimeError, match="required preflight"):
             command.stamp(configuration(connection), BASELINE)

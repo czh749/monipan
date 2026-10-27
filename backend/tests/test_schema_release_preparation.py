@@ -56,7 +56,9 @@ def test_upload_artifact_embeds_reviewed_release_and_checks_final_image_without_
                  and isinstance(node.targets[0],ast.Name) and node.targets[0].id in {"expected","scripts"}}
     assert len(assignments["expected"])==154
     assert all(name.startswith(("app/","vendor/")) for name in assignments["expected"])
-    assert assignments["scripts"]["migration_baseline_probe.py"]==(ROOT/"scripts/migration_baseline_probe.py").read_text(encoding="utf-8")
+    # This archived Stage 0 bundle remains byte-for-byte fixed when the live
+    # probe gains a Stage 1 refusal guard. Compare its reviewed historical hash.
+    assert hashlib.sha256(assignments["scripts"]["migration_baseline_probe.py"].encode()).hexdigest()=="e32ca52ee0fc7a49ace688f48e642fa3626f2c83881bdad2b0f53a426e72bc88"
     assert "shutil.copy" not in probe and '"source_overlay_applied"] = False' in probe
 
 

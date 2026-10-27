@@ -102,6 +102,9 @@ from .services.trading import (
     position_sellable_values,
 )
 from .services.review import cents, day_review, last_completed_date, local_date, rebuild_daily_snapshots, snapshot_values
+from .services.research_watchlist import add_research_watchlist, lock_account
+from .services.security_catalog import search_directory
+from .services.stock_activity import active_stock_condition
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +264,7 @@ def order_values(order: Order) -> dict:
 def list_stocks(
     keyword: str = Query(default="", max_length=40),
     industry: str = Query(default="", max_length=40),
+    account: SimulationAccount = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     """
@@ -278,10 +282,11 @@ def list_stocks(
 
     排序：按股票代码升序（600xxx 在前，000xxx/002xxx/300xxx 在后）
     """
-    # 只展示已经取得有效真实行情的股票，不暴露待行情占位记录。
+    # 默认池只显示有效报价；自己的池外研究股票可显示明确的准备状态。
     query = (
         select(Stock)
-        .where(Stock.price > 0, Stock.prev_close > 0)
+        .where(active_stock_condition(account.id), or_(
+            (Stock.price > 0) & (Stock.prev_close > 0), Stock.research_only.is_(True)))
         .order_by(Stock.symbol)
     )
 
@@ -319,7 +324,7 @@ def get_stock(symbol: str, db: Session = Depends(get_db)) -> dict:
     stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
     if not stock:
         raise HTTPException(status_code=404, detail="股票不存在")
-    if stock.price <= 0 or stock.prev_close <= 0:
+    if not stock.research_only and (stock.price <= 0 or stock.prev_close <= 0):
         raise HTTPException(status_code=503, detail="该股票尚未取得真实行情")
     return stock_values(stock)
 
@@ -551,27 +556,23 @@ def list_watchlist(
     return [{"symbol": item.stock.symbol, "created_at": item.created_at} for item in items]
 
 
+@router.get("/securities/search")
+def search_securities(
+    keyword: str = Query(default="", max_length=40),
+    limit: int = Query(default=20, ge=1, le=50),
+    account: SimulationAccount = Depends(get_current_account),
+    db: Session = Depends(get_db),
+):
+    return search_directory(db, keyword, account.id, limit=limit)
+
+
 @router.post("/watchlist/{symbol}", response_model=WatchlistItemOut, status_code=201)
 def add_watchlist_item(
     symbol: str,
     account: SimulationAccount = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> dict:
-    stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
-    if not stock:
-        raise HTTPException(status_code=404, detail="股票不存在")
-    item = db.scalar(
-        select(WatchlistItem).where(
-            WatchlistItem.account_id == account.id,
-            WatchlistItem.stock_id == stock.id,
-        )
-    )
-    if item is None:
-        item = WatchlistItem(account_id=account.id, stock_id=stock.id)
-        db.add(item)
-        db.commit()
-        db.refresh(item)
-    return {"symbol": stock.symbol, "created_at": item.created_at}
+    return add_research_watchlist(db, account.id, symbol)
 
 
 @router.delete("/watchlist/{symbol}", status_code=204)
@@ -580,10 +581,12 @@ def remove_watchlist_item(
     account: SimulationAccount = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> None:
+    lock_account(db, account.id)
     item = db.scalar(
         select(WatchlistItem)
         .join(Stock, WatchlistItem.stock_id == Stock.id)
         .where(WatchlistItem.account_id == account.id, Stock.symbol == symbol)
+        .with_for_update()
     )
     if item is not None:
         db.delete(item)

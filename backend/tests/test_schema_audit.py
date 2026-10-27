@@ -34,7 +34,7 @@ def test_complete_schema_matches_and_cannot_authorize_stamping(database):
     with engine.connect() as connection:
         report = audit(connection, expected)
     assert report["status"] == "matches_model_precheck"
-    assert report["model_tables"] == report["actual_business_tables"] == 31
+    assert report["model_tables"] == report["actual_business_tables"] == 32
     assert report["foreign_keys_inspected"] == 37
     assert report["differences"] == []
     assert report["schema_modified"] is report["business_rows_read"] is report["ready_to_stamp"] is False
@@ -72,7 +72,7 @@ def test_version_table_is_inspected_without_becoming_a_business_table(database):
     with engine.connect() as connection:
         report = audit(connection, expected)
     assert report["schema_versions"] == ["baseline_fixture"]
-    assert report["actual_business_tables"] == 31
+    assert report["actual_business_tables"] == 32
     assert report["differences"] == []
 
 

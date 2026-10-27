@@ -53,6 +53,8 @@ def quote_blocking_reason(stock: Stock, now: datetime) -> str | None:
 
 
 def trading_blocking_reason(stock: Stock, now: datetime) -> str | None:
+    if stock.research_only:
+        return "该股票当前仅供研究，尚未开放模拟交易"
     session, label, _ = market_session(now)
     if session not in {"morning", "afternoon"}:
         return f"{label}，仅连续竞价时段接受模拟委托"
@@ -188,6 +190,8 @@ def build_order_preview(
     stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
     if not stock:
         raise HTTPException(status_code=404, detail="股票不存在")
+    if stock.research_only:
+        raise HTTPException(status_code=403, detail="该股票当前仅供研究，尚未开放模拟交易")
     if stock.price <= 0 or stock.prev_close <= 0:
         raise HTTPException(status_code=503, detail="该股票尚未取得真实行情，暂不可下单")
 
@@ -578,7 +582,7 @@ def match_pending_orders(db: Session) -> int:
     matched = 0
     for order in orders:
         stock = order.stock
-        if quote_blocking_reason(stock, observed_at):
+        if trading_blocking_reason(stock, observed_at):
             continue
         if order.submitted_quote_at and stock.quote_source_at <= order.submitted_quote_at:
             continue

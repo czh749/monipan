@@ -58,6 +58,8 @@ class StockOut(BaseModel):
     name: str
     exchange: str
     industry: str
+    research_only: bool = False
+    quote_status: Literal["pending", "ready"] = "ready"
     prev_close: Decimal
     price: Decimal
     open_price: Decimal

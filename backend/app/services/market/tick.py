@@ -1,6 +1,9 @@
 """行情刷新：将东财返回的行情覆盖写入数据库。"""
 
 from decimal import Decimal
+import time
+
+from ..stock_activity import active_stock_condition
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -71,57 +74,11 @@ def tick_market(db: Session) -> int:
 
         # 最久未成功更新的股票优先，避免每轮部分成功时总是同一批股票陈旧。
         stocks = db.scalars(
-            select(Stock).order_by(Stock.updated_at.asc(), Stock.id.asc())
+            select(Stock).where(active_stock_condition()).order_by(Stock.updated_at.asc(), Stock.id.asc())
         ).all()
         quotes = fetch_eastmoney_quotes([stock.symbol for stock in stocks])
         batch_stats = getattr(quotes, "stats", None)
-        updated_count = 0
-        for stock in stocks:
-            quote = quotes.get(stock.symbol)
-            if not quote:
-                continue
-            quote_trade_date = quote.get("quote_trade_date")
-            same_trade_date = (
-                quote_trade_date is not None
-                and stock.quote_trade_date == quote_trade_date
-            )
-            quoted_open = quote.get("open_price")
-            quoted_high = quote.get("high_price")
-            quoted_low = quote.get("low_price")
-            stock.price = quote["price"]
-            stock.prev_close = quote["prev_close"]
-            stock.open_price = (
-                quoted_open
-                or (stock.open_price if same_trade_date else stock.prev_close)
-            )
-            stock.high_price = max(
-                quoted_high
-                or (stock.high_price if same_trade_date else stock.open_price),
-                stock.open_price,
-                stock.price,
-            )
-            stock.low_price = min(
-                quoted_low
-                or (stock.low_price if same_trade_date else stock.open_price),
-                stock.open_price,
-                stock.price,
-            )
-            if quote.get("volume") is not None:
-                stock.volume = quote["volume"]
-            elif not same_trade_date:
-                stock.volume = 0
-            if quote.get("name"):
-                stock.name = quote["name"]
-            if quote_trade_date is not None:
-                stock.quote_trade_date = quote_trade_date
-            if "quote_source_at" in quote:
-                stock.quote_source_at = quote["quote_source_at"]
-            stock.updated_at = quote["updated_at"]
-            if quote_trade_date is not None:
-                upsert_latest_stock_bar(db, stock)
-                upsert_quote_raw_close(db, stock)
-            updated_count += 1
-
+        updated_count = apply_quotes(db, stocks, quotes)
         db.commit()
         # 行情落库后撮合已触价的限价委托。延迟导入避免行情与交易服务循环依赖。
         from ..trading import match_pending_orders
@@ -138,3 +95,80 @@ def tick_market(db: Session) -> int:
 
     MARKET_REFRESH_STATE.succeed(updated_count, batch_stats=batch_stats)
     return updated_count
+
+
+def apply_quotes(db, stocks, quotes):
+    updated_count = 0
+    for stock in stocks:
+        quote = quotes.get(stock.symbol)
+        if not quote:
+            continue
+        quote_trade_date = quote.get("quote_trade_date")
+        same_trade_date = (
+            quote_trade_date is not None
+            and stock.quote_trade_date == quote_trade_date
+        )
+        quoted_open = quote.get("open_price")
+        quoted_high = quote.get("high_price")
+        quoted_low = quote.get("low_price")
+        stock.price = quote["price"]
+        stock.prev_close = quote["prev_close"]
+        stock.open_price = (
+            quoted_open
+            or (stock.open_price if same_trade_date else stock.prev_close)
+        )
+        stock.high_price = max(
+            quoted_high
+            or (stock.high_price if same_trade_date else stock.open_price),
+            stock.open_price,
+            stock.price,
+        )
+        stock.low_price = min(
+            quoted_low
+            or (stock.low_price if same_trade_date else stock.open_price),
+            stock.open_price,
+            stock.price,
+        )
+        if quote.get("volume") is not None:
+            stock.volume = quote["volume"]
+        elif not same_trade_date:
+            stock.volume = 0
+        if quote.get("name"):
+            stock.name = quote["name"]
+        if quote_trade_date is not None:
+            stock.quote_trade_date = quote_trade_date
+        if "quote_source_at" in quote:
+            stock.quote_source_at = quote["quote_source_at"]
+        stock.updated_at = quote["updated_at"]
+        if quote_trade_date is not None:
+            upsert_latest_stock_bar(db, stock)
+            upsert_quote_raw_close(db, stock)
+        updated_count += 1
+    return updated_count
+
+
+# The existing market loop owns this queue. Requests only persist membership.
+# Failed identities retry after five minutes; a full round can recover earlier.
+_PENDING_ATTEMPTS: dict[str, float] = {}
+
+
+def tick_pending_research(db: Session, *, monotonic_now=None) -> int:
+    from . import fetch_eastmoney_quotes
+    observed = time.monotonic() if monotonic_now is None else monotonic_now
+    stocks = db.scalars(select(Stock).where(
+        active_stock_condition(), Stock.research_only.is_(True),
+        (Stock.price <= 0) | (Stock.prev_close <= 0)).order_by(Stock.id)).all()
+    active_symbols = {s.symbol for s in stocks}
+    for symbol in list(_PENDING_ATTEMPTS):
+        if symbol not in active_symbols:
+            del _PENDING_ATTEMPTS[symbol]
+    candidates = sorted(stocks, key=lambda s: _PENDING_ATTEMPTS.get(s.symbol, -1))
+    candidates = [s for s in candidates if observed - _PENDING_ATTEMPTS.get(s.symbol, -1000) >= 300][:20]
+    if not candidates:
+        return 0
+    for stock in candidates:
+        _PENDING_ATTEMPTS[stock.symbol] = observed
+    quotes = fetch_eastmoney_quotes([s.symbol for s in candidates])
+    count = apply_quotes(db, candidates, quotes)
+    db.commit()
+    return count

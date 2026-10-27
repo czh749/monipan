@@ -18,11 +18,10 @@ from decimal import Decimal
 import os
 from sqlalchemy import text
 from app.database import Base, engine, SessionLocal
-from app.schema import adopt_baseline
+from app.schema import upgrade_database
 from app.models import User, SimulationAccount, Stock, Position, Order, Trade, AccountTransaction, RateLimitCounter
 from app.models import AgentRun, AgentEvidence, AgentRecommendation
-Base.metadata.create_all(engine)
-adopt_baseline(engine)
+upgrade_database(engine)
 with SessionLocal() as db:
     first=User(username="restored_first", status="ACTIVE")
     second=User(username="restored_second", status="ACTIVE")

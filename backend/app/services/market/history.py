@@ -310,10 +310,12 @@ def backfill_stock_history_once(
     )
 
     def candidate(after_id: int) -> Stock | None:
+        from ..stock_activity import active_stock_condition
         return db.scalar(
             select(Stock)
             .where(
                 Stock.id > after_id,
+                active_stock_condition(),
                 Stock.price > 0,
                 Stock.prev_close > 0,
                 or_(bar_count < target_count, incomplete_metric_count > 1),
