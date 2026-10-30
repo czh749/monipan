@@ -7,6 +7,7 @@ import type {
   OrderRequest,
   Position,
   Stock,
+  SecuritySearchResult,
   StockAnnouncements,
   StockFundamentals,
   StockHistory,
@@ -69,6 +70,7 @@ export const api = {
     }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   stocks: () => request<Stock[]>('/api/stocks'),
+  searchSecurities: (keyword: string) => request<SecuritySearchResult>(`/api/securities/search?keyword=${encodeURIComponent(keyword)}`),
   marketStatus: () => request<MarketStatus>('/api/market/status'),
   marketIndices: () => request<MarketIndex[]>('/api/market/indices'),
   account: () => request<Account>('/api/account'),
@@ -88,7 +90,8 @@ export const api = {
   watchlist: () => request<WatchlistItem[]>('/api/watchlist'),
   addWatchlist: (symbol: string) => request<WatchlistItem>(`/api/watchlist/${symbol}`, { method: 'POST' }),
   removeWatchlist: (symbol: string) => request<void>(`/api/watchlist/${symbol}`, { method: 'DELETE' }),
-  stockHistory: (symbol: string) => request<StockHistory>(`/api/stocks/${symbol}/history`),
+  stockHistory: (symbol: string, refresh = true) =>
+    request<StockHistory>(`/api/stocks/${symbol}/history?refresh=${refresh}`),
   stockFundamentals: (symbol: string) =>
     request<StockFundamentals>(`/api/stocks/${symbol}/fundamentals`),
   stockAnnouncements: (symbol: string, days = 90, limit = 20) =>

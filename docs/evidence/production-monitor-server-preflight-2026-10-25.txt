@@ -1,0 +1,4 @@
+python3 -u /home/ubuntu/monipan-monitor-20261025.py preflight
+/home/ubuntu/monipan-monitor-20261025.py: OK
+{"event": "PREFLIGHT_READ_ONLY", "checks": {"containers": {"ok": true, "detail": "healthy"}, "edge": {"ok": true, "detail": "nginx_active_required"}, "readiness": {"ok": true, "detail": "ready"}, "disk": {"ok": true, "detail": "space_ok"}, "backup_timer": {"ok": true, "detail": "timer_enabled_active_required"}, "backup_result": {"ok": true, "detail": "success"}, "backup_age": {"ok": true, "detail": "age_hours=16.96"}}}
+root@VM-4-5-ubuntu:~#

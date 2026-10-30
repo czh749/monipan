@@ -68,7 +68,7 @@ def _not_found(tool_name: str, symbol: str) -> dict[str, Any]:
         tool_name,
         "NOT_FOUND",
         data={"symbol": symbol},
-        warnings=["股票不存在或不在当前200只股票池中"],
+        warnings=["股票尚未加入研究范围或不存在"],
     )
 
 
@@ -100,6 +100,11 @@ def build_readonly_tools(
                 stock = _stock(db, symbol)
                 if stock is None:
                     return _not_found(tool_name, symbol)
+                if stock.price <= 0 or stock.prev_close <= 0:
+                    return tool_result(tool_name, "NO_DATA",
+                        data={"symbol": symbol, "name": stock.name, "quote_status": "pending",
+                              "research_only": stock.research_only},
+                        warnings=["尚未取得有效行情，占位值不能作为价格证据"])
                 quote = stock_values(stock)
                 market_status = market_status_values(db)
                 warnings = []

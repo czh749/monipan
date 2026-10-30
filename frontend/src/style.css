@@ -39,6 +39,26 @@
   box-sizing: border-box;
 }
 
+.security-explorer { margin: 0 0 18px; padding: 20px 24px; }
+.security-search-head, .security-search-controls, .security-results li, .security-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.security-search-head h2 { margin: 0; font-size: 18px; }
+.security-search-head p, .security-source { color: var(--signal-secondary); font-size: 12px; line-height: 1.8; }
+.security-search-controls .search-box { flex: 1; max-width: 560px; }
+.research-quota { color: var(--trade-signal); font: 12px var(--mono); white-space: nowrap; }
+.research-badge { display: inline-block; margin-left: 8px; padding: 2px 6px; color: var(--warning); background: var(--warning-wash); border-radius: 3px; font-size: 11px; vertical-align: middle; }
+.security-results { margin: 12px 0 0; padding: 0; list-style: none; }
+.security-results li { padding: 12px 0; border-top: 1px solid var(--deck-line-soft); }
+.security-results small { display: block; margin: 6px 0; color: var(--signal-secondary); font-size: 12px; }
+.security-results a { color: var(--trade-signal); font-size: 11px; }
+.security-actions { flex-shrink: 0; gap: 8px; }
+.security-message, .research-notice { color: var(--warning); font-size: 13px; line-height: 1.7; }
+.research-notice { padding: 12px 24px; margin: 0; background: var(--warning-wash); }
+@media (max-width: 640px) {
+  .security-explorer { padding: 16px; }
+  .security-search-head, .security-search-controls, .security-results li { align-items: stretch; flex-direction: column; gap: 10px; }
+  .security-actions { justify-content: flex-end; }
+}
+
 html {
   background: var(--night-canvas);
 }

@@ -1,0 +1,19 @@
+[Unit]
+Description=MoniPan lightweight health and backup email checks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/monipan-monitor/monitor.py check
+TimeoutStartSec=120
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/monipan-monitor
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=monipan-monitor

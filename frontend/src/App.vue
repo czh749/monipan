@@ -5,6 +5,7 @@ import AuthGateway from './components/AuthGateway.vue'
 import MarketOverview from './components/MarketOverview.vue'
 import OrderNotice from './components/OrderNotice.vue'
 import MarketMatrix from './components/MarketMatrix.vue'
+import SecurityExplorer from './components/SecurityExplorer.vue'
 import OrderConfirmation from './components/OrderConfirmation.vue'
 import OrderTicket from './components/OrderTicket.vue'
 import ReviewWorkspace from './components/ReviewWorkspace.vue'
@@ -27,6 +28,7 @@ const {
   marketIndices,
   loading: marketLoading,
   error: marketError,
+  refreshMarket,
   startMarketPolling,
   stopMarketPolling,
 } = useMarketData()
@@ -108,6 +110,24 @@ function selectStock(stock: Stock) {
   selectedSymbol.value = stock.symbol
 }
 
+async function changeResearchWatchlist(symbol: string) {
+  const user = currentUser.value
+  await toggleWatchlist(symbol)
+  if (user && currentUser.value === user) {
+    await refreshMarket()
+    if (!stocks.value.some((item) => item.symbol === selectedSymbol.value)) {
+      selectedSymbol.value = stocks.value[0]?.symbol ?? '600519'
+      detailOpen.value = false
+      analysisOpen.value = false
+    }
+  }
+}
+
+function openResearchSymbol(symbol: string) {
+  const stock = stocks.value.find((item) => item.symbol === symbol)
+  if (stock) showStockDetails(stock)
+}
+
 async function openPersonalCenter() {
   if (!currentUser.value) return
   activeView.value = 'account'
@@ -179,7 +199,8 @@ async function handleAuthenticate(mode: 'login' | 'register', payload: AuthReque
       ? await api.login(payload)
       : await api.register(payload)
     activeView.value = 'trading'
-    await initializePrivateWorkspace()
+    await Promise.all([startMarketPolling(), initializePrivateWorkspace()])
+    await refreshOrderPreview()
     await animateTradingStage()
   } catch (reason) {
     authError.value = reason instanceof Error ? reason.message : '认证失败，请稍后重试'
@@ -189,6 +210,7 @@ async function handleAuthenticate(mode: 'login' | 'register', payload: AuthReque
 }
 
 async function handleLogout() {
+  stopMarketPolling()
   try {
     await api.logout()
   } finally {
@@ -204,16 +226,15 @@ async function handleLogout() {
 }
 
 onMounted(async () => {
-  const marketReady = startMarketPolling()
   try {
     currentUser.value = await api.currentUser()
-    await initializePrivateWorkspace()
+    await Promise.all([startMarketPolling(), initializePrivateWorkspace()])
+    await refreshOrderPreview()
   } catch {
     currentUser.value = null
   } finally {
     authChecking.value = false
   }
-  await marketReady
   await animateTradingStage()
   clockTimer = window.setInterval(() => (currentTime.value = Date.now()), 1000)
 })
@@ -247,9 +268,9 @@ onBeforeUnmount(() => {
       </div>
       <div class="market-status" :class="marketStatusClass">
         <span class="status-dot"></span>
-        <strong>{{ marketStatus?.status_label ?? (marketLoading ? '连接行情服务' : '状态未知') }}</strong>
+        <strong>{{ !currentUser ? '请登录' : marketStatus?.status_label ?? (marketLoading ? '连接行情服务' : '状态未知') }}</strong>
         <span class="status-note">
-          {{ marketStatus ? `${marketStatus.session_label} · 新鲜 ${marketStatus.fresh_count}/${marketStatus.total_count}` : '等待状态数据' }}
+          {{ !currentUser ? '登录后读取个人行情' : marketStatus ? `${marketStatus.session_label} · 新鲜 ${marketStatus.fresh_count}/${marketStatus.total_count}` : '等待状态数据' }}
         </span>
       </div>
       <div class="user-chip" :class="{ anonymous: !currentUser }">
@@ -344,16 +365,17 @@ onBeforeUnmount(() => {
       <div v-if="error" class="alert"><span>!</span>{{ error }}<button @click="clearError">×</button></div>
       <OrderNotice :notice="orderNotice" @close="closeOrderNotice" />
 
+      <SecurityExplorer v-if="activeView === 'trading' && currentUser" :key="currentUser.username" :watchlist-symbols="watchlistSymbols" :change-watchlist="changeResearchWatchlist" @open="openResearchSymbol" />
       <section v-if="activeView === 'trading'" class="workspace">
         <MarketMatrix
           :stocks="stocks"
           :selected-symbol="selectedSymbol"
-          :total-count="marketStatus?.total_count ?? stocks.length"
+          :total-count="stocks.length"
           :loading="marketLoading"
           :watchlist-symbols="watchlistSymbols"
           :position-symbols="positionSymbols"
           @select="selectStock"
-          @toggle-watchlist="toggleWatchlist"
+          @toggle-watchlist="(symbol: string) => changeResearchWatchlist(symbol).catch(() => {})"
           @show-details="showStockDetails"
         />
         <OrderTicket

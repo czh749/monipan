@@ -145,6 +145,7 @@ class Stock(Base):
     name: Mapped[str] = mapped_column(String(40), index=True)
     exchange: Mapped[str] = mapped_column(String(8))
     industry: Mapped[str] = mapped_column(String(40))
+    research_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     prev_close: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     open_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
@@ -154,6 +155,25 @@ class Stock(Base):
     quote_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     quote_source_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SecurityCatalogEntry(Base):
+    """Low-frequency exchange directory, independent of quote subscriptions."""
+
+    __tablename__ = "security_catalog_entries"
+    __table_args__ = (UniqueConstraint("exchange", "symbol", name="uq_catalog_exchange_symbol"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(6), index=True)
+    exchange: Mapped[str] = mapped_column(String(8))
+    name: Mapped[str] = mapped_column(String(40), index=True)
+    full_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    board: Mapped[str] = mapped_column(String(32))
+    industry: Mapped[str] = mapped_column(String(80), default="")
+    listing_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source_url: Mapped[str] = mapped_column(String(512))
+    collected_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class StockBar(Base):

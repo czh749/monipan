@@ -10,7 +10,7 @@ import type {
   Position,
   Stock,
 } from '../types'
-import { formatNumber, riseClass } from '../utils/formatters'
+import { formatNumber, quoteNumber, riseClass } from '../utils/formatters'
 
 const props = defineProps<{
   open: boolean
@@ -278,8 +278,9 @@ onBeforeUnmount(() => {
         <div class="research-instrument">
           <div><strong>{{ stock.name }}</strong><span>{{ stock.symbol }} · {{ stock.exchange }}</span></div>
           <div :class="riseClass(stock.change)">
-            <strong>{{ formatNumber(stock.price) }}</strong>
-            <span>{{ Number(stock.change_percent) >= 0 ? '+' : '' }}{{ formatNumber(stock.change_percent) }}%</span>
+            <strong>{{ quoteNumber(stock.price) }}</strong>
+            <span v-if="stock.quote_status === 'pending'">等待首次行情</span>
+            <span v-else>{{ Number(stock.change_percent) >= 0 ? '+' : '' }}{{ formatNumber(stock.change_percent) }}%</span>
           </div>
         </div>
         <div class="research-page-status">

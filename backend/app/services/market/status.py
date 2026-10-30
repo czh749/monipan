@@ -12,6 +12,7 @@ from ...models import Stock
 from .constants import HEALTHY_COVERAGE_THRESHOLD_PERCENT
 from .session import market_refresh_interval, market_session
 from .types import BatchFetchStats, MARKET_REFRESH_STATE
+from ..stock_activity import active_stock_condition
 
 
 def market_status_values(
@@ -30,13 +31,14 @@ def market_status_values(
         observed_at.replace(tzinfo=UTC)
     )
 
-    valid_quote = (Stock.price > 0, Stock.prev_close > 0)
+    active = active_stock_condition()
+    valid_quote = (active, Stock.price > 0, Stock.prev_close > 0)
     latest_allowed_at = observed_at + timedelta(seconds=60)
     valid_source_time = (
         *valid_quote,
         Stock.quote_source_at <= latest_allowed_at,
     )
-    total_count = db.scalar(select(func.count()).select_from(Stock)) or 0
+    total_count = db.scalar(select(func.count()).select_from(Stock).where(active)) or 0
     available_count = (
         db.scalar(
             select(func.count()).select_from(Stock).where(*valid_quote)

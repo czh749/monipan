@@ -5,6 +5,7 @@ from typing import Any
 
 from ...models import MarketIndex, Stock
 from .constants import CENT
+from .preparation import quote_preparation
 
 
 def market_index_values(item: MarketIndex) -> dict[str, Any]:
@@ -35,6 +36,9 @@ def stock_values(stock: Stock) -> dict:
         "name": stock.name,
         "exchange": stock.exchange,
         "industry": stock.industry,
+        "research_only": stock.research_only,
+        "quote_status": "ready" if stock.price > 0 and stock.prev_close > 0 else "pending",
+        **quote_preparation(stock),
         "prev_close": stock.prev_close,
         "price": stock.price,
         "open_price": stock.open_price,

@@ -1,0 +1,11 @@
+# Linux host with TLS terminated by the existing host Nginx.
+# Use together with compose.yaml; retain the existing project name and network.
+services:
+  backend:
+    environment:
+      MONIPAN_ENVIRONMENT: production
+      MONIPAN_COOKIE_SECURE: "1"
+      FORWARDED_ALLOW_IPS: ${MONIPAN_FORWARDED_ALLOW_IPS:?Set the verified backend proxy network}
+  frontend:
+    volumes:
+      - ./deploy/nginx/proxy-trust.production.conf:/etc/nginx/monipan-proxy-trust.conf:ro

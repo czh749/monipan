@@ -55,7 +55,7 @@ export function useOrderEntry({
 
   async function refreshOrderPreview() {
     const stock = selectedStock.value
-    if (disposed || !currentUser.value || !stock || quantity.value <= 0 || quantity.value % 100 !== 0 || (orderType.value === 'LIMIT' && limitPrice.value <= 0)) {
+    if (disposed || !currentUser.value || !stock || stock.research_only || stock.quote_status === 'pending' || quantity.value <= 0 || quantity.value % 100 !== 0 || (orderType.value === 'LIMIT' && limitPrice.value <= 0)) {
       previewRequestId++
       orderPreview.value = null
       previewLoading.value = false

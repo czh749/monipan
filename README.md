@@ -1,5 +1,7 @@
 # 模拟盘（MoniPan）
 
+阶段 1 的“搜索、添加和研究池外沪深 A 股”已在本地实现：每人最多添加 30 只，新增股票仅研究，默认 200 只继续交易。**尚未生产发布**；使用方式、验证结果与剩余门槛见 [阶段 1 本地验收](docs/stage1-research-acceptance-2026-10-27.md)。
+
 一个面向 A 股学习场景的模拟交易 MVP（当前 v0.4），采用 Vue 3、FastAPI 和 MySQL。当前固定股票池为沪深 A 股，行情分批获取东方财富公开快照，交易和资金仍为模拟。推荐通过 Docker Compose 部署。
 
 ## 已有功能
@@ -123,6 +125,8 @@ environment:
 
 在项目根目录执行：
 
+以下直接启动步骤适用于开发空库。Alembic 已于 2026-10-25 正式上线；已有无版本数据库需要先备份，再按 [迁移接入记录](docs/database-migration-2026-10-18.md) 核验和接入基线。已完成的本轮生产发布不重复执行，见 [生产发布记录](docs/schema-production-release-2026-10-25.md)。后续生产更新仍需隔离验证与显式迁移检查。
+
 ```powershell
 docker compose up -d --build
 ```
@@ -193,16 +197,21 @@ DEEPSEEK_API_KEY=请填写你的DeepSeek密钥
 ```
 
 `.env` 已被 Git 忽略。MySQL 端口只暴露在 Docker 内部网络，不会映射到宿主机。
-容器内 Nginx 会隐藏 `/docs`、`/redoc`、`/openapi.json`，并对登录、注册、AI 和普通 API 增加第一层 IP 限流。手动行情刷新接口已删除，行情只由后台循环更新。
+容器内 Nginx 会隐藏 `/docs`、`/redoc`、`/openapi.json`，对登录、注册、AI 和普通 API 增加第一层 IP 限流，并使用强制 CSP。手动行情刷新接口已删除，行情只由后台循环更新。
 
 ### 审核期线上加固
 
 本地开发保持 `MONIPAN_ENVIRONMENT=development`。确认外层 HTTPS、数据库密码和现有 MySQL 用户密码已经一致后，线上应显式设置：
 
 ```dotenv
+COMPOSE_FILE=compose.yaml:compose.production.yaml
+COMPOSE_PROJECT_NAME=monipan
 MONIPAN_ENVIRONMENT=production
 MONIPAN_COOKIE_SECURE=1
+MONIPAN_FORWARDED_ALLOW_IPS=172.18.0.0/16
 ```
+
+上述 Compose 文件列表仅用于 Linux 生产服务器；保留已有项目名及数据库密码。本地 HTTP 开发继续只用基础 Compose。生产配置沿用 2026-10-17 已确认的宿主机入口 `172.18.0.1` 和项目网段 `172.18.0.0/16`，使用前核对实际网络；网络重建或代理层变化后必须重新确认。生产覆盖文件保存代理信任与 Secure Cookie 配置，宿主机 HSTS 和代理片段保存在 `deploy/nginx/`。完整同步及发布步骤见 [线上加固运行手册](docs/production-hardening.md)。
 
 如果审核环境仍通过纯 HTTP 访问，请暂时保留 development 和非 Secure Cookie；否则浏览器不会在 HTTP 请求中发送登录 Cookie。切换 production 前必须先完成 HTTPS 冒烟测试。
 
@@ -212,7 +221,7 @@ MONIPAN_COOKIE_SECURE=1
 
 - `/health`：保留原有兼容响应；
 - `/livez`：只检查后端进程存活；
-- `/readyz`：额外执行数据库 `SELECT 1`，失败时返回不包含连接信息的 503。
+- `/readyz`：额外执行数据库 `SELECT 1` 和迁移版本核对，失败时返回不包含连接信息的 503。
 
 手动生成带校验值的 MySQL 备份：
 
@@ -282,19 +291,28 @@ pnpm dev
 
 ## 测试
 
-```powershell
-cd backend
-python -m pytest
-```
-
-测试环境仍使用独立的临时 SQLite 数据库，不会读写 Docker 中的 MySQL 数据。
-
-前端回归测试与构建：
+在项目根目录运行一次日常检查（后端回归、前端测试、类型检查和构建）：
 
 ```powershell
-cd frontend
-pnpm test
-pnpm build
+.\backend\.venv\Scripts\python.exe scripts/check_project.py
 ```
 
-前端测试覆盖委托预览、确认、撤单、会话切换与动画清理，使用模拟 API，不会提交真实请求；构建同时执行 Vue 和 TypeScript 类型检查。
+首次准备环境时，后端安装 `backend/requirements.lock`，前端执行 `pnpm install --frozen-lockfile`。检查使用当前 Python 解释器；Linux 或已激活虚拟环境时可直接使用 `python scripts/check_project.py`。
+
+后端日常回归使用临时 SQLite，入口不会继承部署数据库、Compose 选择和真实 API 密钥。每次结果保存到 `.docker/checks/<时间与随机编号>/summary.json`，后端另有 JUnit XML；缺少工具或历史发布包的跳过会单独列出，MySQL 未运行明确标记为 `not_run`。
+
+只运行某一组，或显式执行已有隔离空库上的 MySQL 专项：
+
+```text
+python scripts/check_project.py --scope backend
+python scripts/check_project.py --scope frontend
+python scripts/check_project.py --scope mysql
+```
+
+MySQL 专项要求私有环境变量 `MONIPAN_STAGE1_MYSQL_URL` 指向 `127.0.0.1` 上名为 `monipan_stage1_test_<编号>` 的独立空库；拒绝生产库名或已有表，不会自动清空重用数据库。项目部署早已使用 MySQL，此专项验证阶段 1 的结构升级及并发正确性，不是 SQLite 转库。
+
+GitHub Actions 在代码 push、pull request 或手动触发时运行三组独立检查：后端（包含真实 Nginx）、前端、临时 MySQL 8.4 迁移与配额并发。MySQL 必须实际通过，缺少配置或跳过会失败；日常 CI 仅允许缺少已归档历史发布包这一类明确跳过。纯 Markdown 或 `docs/` 更新不自动触发。工作流不会部署，也不使用生产凭据；首次远程运行通过后，才有 CI 已验收的证据。
+
+使用说明、依赖更新和验证边界见 [自动检查说明](docs/automated-checks-2026-10-28.md)。前端测试使用模拟 API，不会提交真实请求；构建同时执行 Vue 和 TypeScript 类型检查。
+
+精确历史发布包的回归检查需要 Git 之外的已归档交付件；缺失时会明确显示跳过，发布验收可开启严格模式使缺失直接失败。监测脚本的单文件交付件由测试在临时目录自动生成。分组提交范围、复核记录及测试边界见 [阶段 0 Git 整理记录](docs/git-organization-2026-10-26.md)。

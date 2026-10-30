@@ -235,7 +235,7 @@ def upsert_latest_stock_bar(db: Session, stock: Stock) -> None:
     )
 
 
-def stock_history(db: Session, stock: Stock, limit: int) -> tuple[str, list[StockBar]]:
+def stock_history(db: Session, stock: Stock, limit: int, *, refresh: bool = True) -> tuple[str, list[StockBar]]:
     """Return history from the provider when possible, otherwise cached snapshots."""
     source = "CACHED_HISTORY"
     prune_impossible_weekend_bars(db, stock)
@@ -252,13 +252,17 @@ def stock_history(db: Session, stock: Stock, limit: int) -> tuple[str, list[Stoc
     target_count = min(limit, HISTORY_CACHE_TARGET_BARS)
     # A single oldest row may legitimately lack a pre-window previous close.
     # Multiple missing values identify a legacy cache that predates bar metrics.
-    if cached_count < target_count or incomplete_metric_count > 1:
+    if refresh and (cached_count < target_count or incomplete_metric_count > 1):
         try:
             rows = fetch_eastmoney_history(stock.symbol, limit)
             reconcile_authoritative_stock_bars(db, stock, rows)
             upsert_stock_bars(db, stock, rows)
             source = "EASTMONEY_HISTORY"
+            from .preparation import record_fetch
+            record_fetch("history", stock.symbol, failed=False)
         except MarketDataError as exc:
+            from .preparation import record_fetch
+            record_fetch("history", stock.symbol, failed=True, retry_seconds=15)
             logger.warning(
                 "历史行情按需补取失败：symbol=%s cached=%s target=%s error=%s",
                 stock.symbol,
@@ -310,10 +314,12 @@ def backfill_stock_history_once(
     )
 
     def candidate(after_id: int) -> Stock | None:
+        from ..stock_activity import active_stock_condition
         return db.scalar(
             select(Stock)
             .where(
                 Stock.id > after_id,
+                active_stock_condition(),
                 Stock.price > 0,
                 Stock.prev_close > 0,
                 or_(bar_count < target_count, incomplete_metric_count > 1),
@@ -341,6 +347,8 @@ def backfill_stock_history_once(
         cached_count = db.scalar(
             select(func.count(StockBar.id)).where(StockBar.stock_id == stock.id)
         ) or 0
+        from .preparation import record_fetch
+        record_fetch("history", stock.symbol, failed=False)
         logger.info(
             "历史行情后台补全：symbol=%s cached=%s target=%s",
             stock.symbol,
@@ -350,6 +358,8 @@ def backfill_stock_history_once(
         return stock.id, stock.symbol, cached_count >= target_count
     except MarketDataError as exc:
         db.rollback()
+        from .preparation import record_fetch
+        record_fetch("history", stock.symbol, failed=True, retry_seconds=20)
         logger.warning(
             "历史行情后台补全延后：symbol=%s error=%s",
             stock.symbol,

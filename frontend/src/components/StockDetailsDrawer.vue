@@ -2,6 +2,7 @@
 import { gsap } from 'gsap'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
+import { useStockHistory } from '../composables/useStockHistory'
 import type {
   CompanyAnnouncement,
   FinancialReport,
@@ -12,10 +13,9 @@ import type {
   StockAnnouncements,
   StockBar,
   StockFundamentals,
-  StockHistory,
   StockRegulatoryLetters,
 } from '../types'
-import { compactVolume, formatNumber, riseClass } from '../utils/formatters'
+import { compactVolume, dateTime, formatNumber, riseClass } from '../utils/formatters'
 
 const props = defineProps<{
   open: boolean
@@ -31,9 +31,9 @@ const emit = defineEmits<{
 type DrawerTab = 'market' | 'fundamentals' | 'events' | 'announcements'
 type AnnouncementRange = 30 | 90 | 365
 
-const history = ref<StockHistory | null>(null)
-const loading = ref(false)
-const error = ref('')
+const { history, loading, error, loadHistory, resetHistory } = useStockHistory({
+  isOpen: () => props.open, currentSymbol: () => props.stock?.symbol,
+})
 const hoveredIndex = ref<number | null>(null)
 const activeTab = ref<DrawerTab>('market')
 const fundamentals = ref<StockFundamentals | null>(null)
@@ -534,19 +534,6 @@ function selectLatestBar() {
   }
 }
 
-async function loadHistory(symbol: string) {
-  loading.value = true
-  error.value = ''
-  try {
-    history.value = await api.stockHistory(symbol)
-  } catch (reason) {
-    history.value = null
-    error.value = reason instanceof Error ? reason.message : '无法加载历史行情'
-  } finally {
-    loading.value = false
-  }
-}
-
 async function loadFundamentals(symbol: string) {
   const requestId = ++fundamentalsRequestId
   fundamentalsLoading.value = true
@@ -678,6 +665,7 @@ watch(
   [() => props.open, () => props.stock?.symbol] as const,
   ([open, symbol], [previousOpen, previousSymbol]) => {
     hoveredIndex.value = null
+    resetHistory()
     if (!open || !symbol) return
 
     const drawerJustOpened = !previousOpen
@@ -741,7 +729,9 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <div class="drawer-quote">
+        <p v-if="stock.research_only" class="research-notice">仅研究 · 尚未开放模拟交易</p>
+        <p v-if="stock.quote_message" class="research-notice" role="status">{{ stock.quote_message }} · 行情时间 {{ dateTime(stock.quote_source_at) }}</p>
+        <div v-if="stock.quote_status !== 'pending'" class="drawer-quote">
           <div :class="riseClass(stock.change)">
             <strong>{{ formatNumber(stock.price) }}</strong>
             <span>{{ Number(stock.change_percent) >= 0 ? '+' : '' }}{{ formatNumber(stock.change_percent) }}%</span>
@@ -839,9 +829,10 @@ onBeforeUnmount(() => {
               <i></i>
               <span>
                 <strong>{{ history.cached_count }} / {{ history.target_count }}</strong>
-                {{ history.complete ? '历史缓存已就绪' : '后台补全中' }}
+                {{ history.preparation_message || (history.complete ? '历史缓存已就绪' : '等待历史行情补齐') }}
               </span>
             </div>
+            <button v-if="error || (history && !history.complete) || history?.preparation_state === 'failed'" type="button" :disabled="loading" @click="loadHistory(stock.symbol)">重试历史行情</button>
           </div>
           <div v-if="loading" class="drawer-state"><span class="loading-dot"></span>正在装载价格结构…</div>
           <div v-else-if="error" class="drawer-state error-state">{{ error }}</div>
@@ -1295,7 +1286,7 @@ onBeforeUnmount(() => {
           <div><span>浮动盈亏</span><strong :class="riseClass(position.profit_loss)">{{ Number(position.profit_loss) >= 0 ? '+' : '' }}{{ formatNumber(position.profit_loss) }}</strong></div>
         </section>
 
-        <footer class="drawer-actions">
+        <footer v-if="!stock.research_only" class="drawer-actions">
           <button class="drawer-buy" @click="emit('prepareOrder', 'BUY')">装载买入票据</button>
           <button class="drawer-sell" :disabled="!position?.sellable_quantity" @click="emit('prepareOrder', 'SELL')">装载卖出票据</button>
         </footer>

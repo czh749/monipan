@@ -1,0 +1,11 @@
+[Unit]
+Description=Check MoniPan every five minutes
+
+[Timer]
+OnActiveSec=5min
+OnUnitInactiveSec=5min
+AccuracySec=15s
+Unit=monipan-monitor.service
+
+[Install]
+WantedBy=timers.target

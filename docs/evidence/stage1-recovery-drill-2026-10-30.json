@@ -1,0 +1,65 @@
+{
+  "observed_at": "2026-10-30T05:31:50.665632+00:00",
+  "project": "monipan-stage1-drill-1043627662ec",
+  "scope": "local database clone and real Docker image recovery",
+  "checks": {
+    "all_original_rows_preserved": true,
+    "candidate_http_and_trading_guards": true,
+    "startup_failure_detected": true,
+    "compatible_image_recovery_and_guards": true,
+    "source_service_preserved": true
+  },
+  "source_container": "d1130622323b12aed9d4042c9d687204e01315d86fd81d23af743db8b4c4ea63",
+  "source_volumes": [
+    "monipan_monipan-mysql-data"
+  ],
+  "images": {
+    "candidate": "sha256:9261ba5e99b340722ef36abfd93a8b946409743fd6a87f12e3b0e0c98846965a",
+    "fallback": "sha256:aa8f05f66adb19cf183f1bd8acf1fcb7ea3a19092e3f2b48c6dff9be43790635",
+    "frontend": "sha256:379eae13dce6bd4cc57841bfc2657ec1a246a809c04db666df6a69c0260b3a31",
+    "mysql": "sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb"
+  },
+  "source_backup_sha256": "732edc4a8250b687854c3ad545f238e901968342fdd7deed8760f3f1efdc6e3c",
+  "clone_volumes": [
+    "monipan-stage1-drill-1043627662ec_drill-data"
+  ],
+  "original_table_counts": {
+    "account_daily_snapshots": 256,
+    "simulation_accounts": 3,
+    "users": 3,
+    "account_transactions": 10,
+    "orders": 10,
+    "stocks": 200,
+    "agent_evidence": 33,
+    "agent_runs": 16,
+    "agent_recommendations": 4,
+    "announcement_sync_states": 15,
+    "auth_sessions": 3,
+    "company_announcements": 1278,
+    "daily_review_notes": 0,
+    "financial_reports": 420,
+    "invitation_codes": 0,
+    "market_indices": 5,
+    "official_document_chunks": 125,
+    "official_document_contents": 19,
+    "performance_events": 978,
+    "positions": 7,
+    "rate_limit_counters": 1,
+    "rate_limit_leases": 0,
+    "raw_close_syncs": 7,
+    "regulatory_letter_replies": 0,
+    "regulatory_letters": 0,
+    "regulatory_sync_states": 19,
+    "stock_bars": 24139,
+    "stock_raw_closes": 1398,
+    "trade_notes": 0,
+    "trades": 10,
+    "watchlist_items": 0
+  },
+  "status": "passed",
+  "url": "http://127.0.0.1:18082",
+  "limitations": [
+    "Local source database clone, not a production snapshot",
+    "Local HTTP development settings, not production TLS"
+  ]
+}

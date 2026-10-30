@@ -15,10 +15,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # ---- 安装依赖 ----
-# 先复制 requirements.txt 并安装依赖（利用 Docker 缓存层）
-# 如果 requirements.txt 没变，此层会被缓存，加速构建
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+# 安装与自动检查相同的固定依赖（利用 Docker 缓存层）
+COPY requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock \
     # 创建非 root 用户运行应用（安全最佳实践）
     && addgroup --system monipan \
     && adduser --system --ingroup monipan monipan

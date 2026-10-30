@@ -1,0 +1,225 @@
+{
+  "date": "2026-10-28",
+  "checked_at": "2026-10-28T06:45:39.397503+00:00",
+  "base_commit": "b9911988e62fef75b34df8afa6e518032e93ecfe",
+  "scope": "isolated local Docker deployment of current uncommitted source; production not accessed",
+  "deployment": {
+    "project": "monipan-verify-20261028-dce4950b",
+    "url": "http://127.0.0.1:18080",
+    "services": {
+      "mysql": {
+        "name": "monipan-verify-20261028-dce4950b-mysql-1",
+        "id": "b339aae5d1929c60f53374a74db7ae73b25771cce3d0c6acac010125aa1cfdbf",
+        "image": "sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+        "health": "healthy"
+      },
+      "backend": {
+        "name": "monipan-verify-20261028-dce4950b-backend-1",
+        "id": "48f0e82c1c7e35e41a1f679b1b906ff7a635458a56fb5dc50f3367624a8634cd",
+        "image": "sha256:aa8f05f66adb19cf183f1bd8acf1fcb7ea3a19092e3f2b48c6dff9be43790635",
+        "health": "healthy"
+      },
+      "frontend": {
+        "name": "monipan-verify-20261028-dce4950b-frontend-1",
+        "id": "15e99de5dffdeebbacef32ad04623805ce51fa7203313ca529027d6db960ec58",
+        "image": "sha256:c26aa362ec197e6a6e476c4776b8a63ede1dc8260a69986100ba6303e97c8b0d",
+        "health": "healthy"
+      }
+    },
+    "normal_background_loops": "enabled after isolated deterministic tests",
+    "model_calls": "not configured or invoked",
+    "restart_policy": "no; start manually when needed",
+    "compose_file": ".docker/docker-verification-20261028-dce4950b/compose.yaml"
+  },
+  "protected_existing_deployment": {
+    "containers_unchanged": true,
+    "container_ids": {
+      "monipan-mysql-1": "d1130622323b12aed9d4042c9d687204e01315d86fd81d23af743db8b4c4ea63",
+      "monipan-backend-1": "264b0a1dd3a366dc558fd9c3d99d760d78bc83895cc648946777d0bc71efe6e6",
+      "monipan-frontend-1": "33cb84bd000c8d854156a510e3b8cd38d3a47a1fb337aee0039d04bfdf9d8813"
+    },
+    "original_url": "http://127.0.0.1:8080",
+    "old_data_volume": "not mounted by verification services"
+  },
+  "build": {
+    "backend": "current backend/Dockerfile and requirements.lock; fresh dependency installation passed",
+    "frontend": "current frontend/Dockerfile; frozen pnpm install, Node22 typecheck and build passed",
+    "official_base_loading": "Docker daemon registry auth timed out; host downloaded official registry objects, verified config/layer sha256 digests, loaded local base images, then built unchanged Dockerfiles",
+    "sources": [
+      {
+        "source": "registry-1.docker.io/library/nginx",
+        "tag": "1.27-alpine",
+        "platform": "linux/amd64",
+        "manifest_digest": "sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8",
+        "config_digest": "sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea",
+        "all_layer_digests_verified": true
+      },
+      {
+        "source": "registry-1.docker.io/library/node",
+        "tag": "22-alpine",
+        "platform": "linux/amd64",
+        "manifest_digest": "sha256:025b8e975a61d94e33abeafaad1255ef44e4898cf1a1b6446860009c72e6d284",
+        "config_digest": "sha256:ae59e9992c6b3e963dd9dac9c476287048177ad8f90ac646669afb738705f56d",
+        "all_layer_digests_verified": true
+      },
+      {
+        "source": "registry-1.docker.io/library/python",
+        "tag": "3.13-slim",
+        "platform": "linux/amd64",
+        "manifest_digest": "sha256:aaf08c5490d52cd92bc27142a5215b1e47355a5eaf9adfad2a0fbc022d0b5490",
+        "config_digest": "sha256:bdfc738a8a869292ec1b01f1b8e620db533e09d1fe68fe980a7118b22dae9cec",
+        "all_layer_digests_verified": true
+      }
+    ],
+    "image_build_log": ".docker/docker-verification-20261028-dce4950b/compose-build.log"
+  },
+  "runtime": {
+    "backend": {
+      "platform": "linux",
+      "python": "3.13.18",
+      "uid": 100
+    },
+    "node": "v22.23.4",
+    "mysql": "8.4.11",
+    "migration_head": "20261026_02",
+    "pip_check": "passed"
+  },
+  "checks": {
+    "mysql_migration_and_concurrency": {
+      "passed": 1,
+      "skipped": 0,
+      "failed": 0
+    },
+    "offline_linux_research_and_trading": {
+      "passed": 35,
+      "skipped": 0,
+      "failed": 0
+    },
+    "frontend_tests": {
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0
+    },
+    "http": {
+      "base_url": "http://127.0.0.1:18080",
+      "checks": {
+        "/": 200,
+        "/health": 200,
+        "/livez": 200,
+        "/readyz": 200,
+        "unauthenticated_private_api": "401",
+        "research_preview_and_submit_blocked": true,
+        "register_and_http_only_cookie": true,
+        "search_add_idempotence_remove": true,
+        "quota_0_1_0": true,
+        "account_isolation": true,
+        "unsupported_stock_rejected": true,
+        "missing_quote_is_pending": true
+      },
+      "readiness": {
+        "status": "ok",
+        "database": "ok"
+      },
+      "assets": {
+        "/assets/index-DTAlAOGn.js": {
+          "sha256": "60767905f97edd57e28dc2193c197d3c4af48fb502f5b49f9524037bf8cfeaec",
+          "matches_local_build": true
+        },
+        "/assets/index-CDmvEibz.css": {
+          "sha256": "cefb0188e0039585d9c4cd16fd74292ea0d2732856608da5b4f17e0f1ad38051",
+          "matches_local_build": true
+        }
+      },
+      "catalog": {
+        "state": "ready",
+        "count": 5222,
+        "collected_at": "2026-10-28T06:36:14"
+      }
+    },
+    "browser": {
+      "login": true,
+      "search": "302132",
+      "catalogCount": 5222,
+      "quotaSequence": [
+        0,
+        1,
+        0
+      ],
+      "researchDetail": true,
+      "noTradeButtonsForResearch": true,
+      "pendingPriceShownAsDash": true,
+      "financialReportVisible": true,
+      "screenshot": "research-detail.png"
+    }
+  },
+  "real_data": {
+    "catalog": {
+      "state": "ready",
+      "count": 5222,
+      "collected_at": "2026-10-28T06:36:14"
+    },
+    "after_normal_background_start": {
+      "stocks": 201,
+      "valid_quotes": 199,
+      "catalog": 5222,
+      "removed_research_stock_retained": true,
+      "financial_reports_retained": 12
+    },
+    "market_snapshot": {
+      "provider": "eastmoney",
+      "provider_label": "东方财富",
+      "source_type": "REAL_PUBLIC_QUOTE",
+      "trading_mode": "SIMULATED",
+      "status": "fresh",
+      "status_label": "行情正常",
+      "status_message": "新鲜行情覆盖 199/200 只（99.5%）。",
+      "session": "afternoon",
+      "session_label": "下午交易",
+      "session_open": true,
+      "refresh_interval_seconds": 60,
+      "fresh_threshold_seconds": 150,
+      "stale_threshold_seconds": 300,
+      "last_attempt_at": "2026-10-28T06:41:24.661189",
+      "last_success_at": "2026-10-28T06:41:45.030718",
+      "latest_quote_at": "2026-10-28T06:41:41",
+      "quote_age_seconds": 111,
+      "updated_count": 199,
+      "available_count": 199,
+      "fresh_count": 199,
+      "total_count": 200,
+      "coverage_percent": "99.5",
+      "fresh_coverage_percent": "99.5",
+      "round_coverage_percent": "99.5",
+      "healthy_coverage_threshold_percent": "95.0",
+      "batch_total_count": 2,
+      "batch_success_count": 1,
+      "batch_failed_count": 1,
+      "batch_retry_count": 2,
+      "batch_recovered_count": 1,
+      "batch_request_attempts": 4,
+      "batch_pause_count": 0,
+      "batch_fallback_used": true,
+      "batch_success_percent": "50.0",
+      "batch_elapsed_seconds": 20.7,
+      "last_error": null,
+      "observed_at": "2026-10-28T06:43:32.987973"
+    },
+    "bounded_quote_sample": "initial two-symbol fetch failed with RemoteDisconnected; subsequent normal default-pool batch recovered through backup node; pool-out sample may remain pending",
+    "fake_quotes_used": false
+  },
+  "remaining": [
+    "GitHub Actions first remote run",
+    "compatible failed-release rollback or forward-fix rehearsal",
+    "bounded-scale capacity and market-quality acceptance",
+    "per-stock initial-quote failure/staleness feedback",
+    "existing production mail/timer evidence"
+  ],
+  "source_sha256": {
+    "backend/Dockerfile": "45ff3ca4a5e322e87bb3f2b96ca6c064208a70453b7b762775d637750f41746e",
+    "backend/requirements.lock": "ff4a569db757d6b1c9f7e2536c73eedb177190147e5bb3665e21201d6aec628d",
+    "backend/app/services/research_watchlist.py": "eb6418ef160a4ccf16e176b7b48cf6f6d62ddb103248cf6429d490cc950be8f0",
+    "frontend/Dockerfile": "a3527837c06ebe212c46f642b27a0a522a5627b25f78669351c32e50cdf201d1",
+    "frontend/package.json": "d0f9222e19874018055092b3bbb6592ff47196d06c794ec6a3f338c5743d26d2",
+    "frontend/pnpm-lock.yaml": "ce59b58d68854095c02645e6c4f3ae1961a48e2cf512701573c440a163e110ee"
+  }
+}

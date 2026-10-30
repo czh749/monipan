@@ -1,0 +1,113 @@
+{
+  "date": "2026-10-25",
+  "source": "user_returned_server_terminal_output",
+  "host": "VM-4-5-ubuntu",
+  "raw_evidence_file": "backup-and-log-verification-2026-10-25.txt",
+  "raw_evidence_sha256": "0aa5b8ea5264e000d67f7a44568a2978ffcf62bde6c17173f0b0f6af25612464",
+  "server_accessed_directly_by_assistant": false,
+  "backup_timer": {
+    "unit": "monipan-backup.timer",
+    "active_state": "active",
+    "unit_file_state": "enabled",
+    "last_trigger_reported": "Sun 2026-10-25 03:00:01 CST",
+    "next_trigger_reported": "Mon 2026-10-26 03:00:00 CST",
+    "timezone": "Asia/Shanghai"
+  },
+  "latest_backup_service": {
+    "result": "success",
+    "exit_status": 0,
+    "exit_timestamp_reported": "Sun 2026-10-25 03:00:02 CST"
+  },
+  "scheduled_backup_runs": [
+    {
+      "started_at": "2026-10-19T03:00:01+08:00",
+      "finished_at": "2026-10-19T03:00:02+08:00",
+      "backup": "monipan-20261018T190001Z.sql.gz",
+      "result": "success"
+    },
+    {
+      "started_at": "2026-10-20T03:00:01+08:00",
+      "finished_at": "2026-10-20T03:00:01+08:00",
+      "backup": "monipan-20261019T190001Z.sql.gz",
+      "result": "success"
+    },
+    {
+      "started_at": "2026-10-21T03:00:01+08:00",
+      "finished_at": "2026-10-21T03:00:01+08:00",
+      "backup": "monipan-20261020T190001Z.sql.gz",
+      "result": "success"
+    },
+    {
+      "started_at": "2026-10-22T03:00:01+08:00",
+      "finished_at": "2026-10-22T03:00:02+08:00",
+      "backup": "monipan-20261021T190001Z.sql.gz",
+      "result": "success"
+    },
+    {
+      "started_at": "2026-10-23T03:00:01+08:00",
+      "finished_at": "2026-10-23T03:00:01+08:00",
+      "backup": "monipan-20261022T190001Z.sql.gz",
+      "result": "success"
+    },
+    {
+      "started_at": "2026-10-24T03:00:01+08:00",
+      "finished_at": "2026-10-24T03:00:02+08:00",
+      "backup": "monipan-20261023T190001Z.sql.gz",
+      "result": "success"
+    },
+    {
+      "started_at": "2026-10-25T03:00:01+08:00",
+      "finished_at": "2026-10-25T03:00:02+08:00",
+      "backup": "monipan-20261024T190001Z.sql.gz",
+      "result": "success"
+    }
+  ],
+  "consecutive_successful_scheduled_days_observed": 7,
+  "backup_integrity": {
+    "directory": "/opt/monipan/backups/daily",
+    "files": [
+      "monipan-20261018T074648Z.sql.gz",
+      "monipan-20261018T190001Z.sql.gz",
+      "monipan-20261019T190001Z.sql.gz",
+      "monipan-20261020T190001Z.sql.gz",
+      "monipan-20261021T190001Z.sql.gz",
+      "monipan-20261022T190001Z.sql.gz",
+      "monipan-20261023T190001Z.sql.gz",
+      "monipan-20261024T190001Z.sql.gz"
+    ],
+    "verified_count": 8,
+    "initial_manual_backup_count": 1,
+    "scheduled_backup_count": 7,
+    "gzip_check_passed_for_all_listed_files": true,
+    "sha256_check_passed_for_all_listed_files": true,
+    "verification_basis": "Each displayed OK follows gzip -t \"$backup\" && sha256sum -c \"$backup.sha256\"; gzip success is silent",
+    "all_eight_backups_restore_tested": false
+  },
+  "production_container_log_configs": {
+    "backend": {
+      "driver": "json-file",
+      "max-size": "10m",
+      "max-file": "5"
+    },
+    "frontend": {
+      "driver": "json-file",
+      "max-size": "10m",
+      "max-file": "5"
+    },
+    "mysql": {
+      "driver": "json-file",
+      "max-size": "10m",
+      "max-file": "5"
+    }
+  },
+  "continuous_backup_acceptance_passed": true,
+  "production_log_rotation_config_acceptance_passed": true,
+  "log_size_threshold_rotation_exercised": false,
+  "backup_retention_cleanup_exercised": false,
+  "whole_host_disaster_recovery_tested": false,
+  "offsite_encrypted_backup": "deferred_by_user",
+  "certificate_alerting": "deferred_by_user",
+  "backup_failure_notification": "pending",
+  "production_containers_changed_by_this_inspection": false,
+  "stage0_fully_accepted": false
+}

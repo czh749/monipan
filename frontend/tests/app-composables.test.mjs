@@ -8,6 +8,10 @@ let server
 let useOrderEntry
 let useTradingScene
 let api
+let useSecuritySearch
+let useWatchlist
+let useMarketData
+let useStockHistory
 let timers
 let mounted
 const originalGlobals = ['window', 'document'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)])
@@ -67,6 +71,10 @@ before(async () => {
   ;({ useOrderEntry } = await server.ssrLoadModule('/src/composables/useOrderEntry.ts'))
   ;({ useTradingScene } = await server.ssrLoadModule('/src/composables/useTradingScene.ts'))
   ;({ api } = await server.ssrLoadModule('/src/api.ts'))
+  ;({ useSecuritySearch } = await server.ssrLoadModule('/src/composables/useSecuritySearch.ts'))
+  ;({ useWatchlist } = await server.ssrLoadModule('/src/composables/useWatchlist.ts'))
+  ;({ useMarketData } = await server.ssrLoadModule('/src/composables/useMarketData.ts'))
+  ;({ useStockHistory } = await server.ssrLoadModule('/src/composables/useStockHistory.ts'))
 })
 
 after(async () => { await server?.close() })
@@ -93,6 +101,116 @@ afterEach(() => {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor)
     else delete globalThis[key]
   }
+})
+
+test('research-only and pending stocks never request an order preview', async (context) => {
+  let calls = 0
+  context.mock.method(api, 'previewOrder', async () => { calls++; return preview() })
+  const { entry, options } = workspace({ selectedStock: ref({ symbol: '688900', research_only: true }) })
+  assert.equal(await entry.refreshOrderPreview(), null)
+  options.selectedStock.value = { symbol: '600519', quote_status: 'pending' }
+  assert.equal(await entry.refreshOrderPreview(), null)
+  assert.equal(calls, 0)
+})
+
+test('history polling reads only cache and unmount cancels the next poll', async (context) => {
+  const calls = []
+  context.mock.method(api, 'stockHistory', async (symbol, refresh) => {
+    calls.push([symbol, refresh])
+    return { symbol, complete: false, bars: [], preparation_state: 'failed' }
+  })
+  const state = mountComposable(() => useStockHistory({ isOpen: () => true, currentSymbol: () => '688900' }))
+  await state.loadHistory('688900')
+  runTimers(30_000)
+  await Promise.resolve(); await Promise.resolve()
+  assert.deepEqual(calls, [['688900', true], ['688900', false]])
+  mounted[0].unmount()
+  runTimers(30_000)
+  assert.equal(calls.length, 2)
+  assert.equal(state.history.value, null)
+})
+
+test('switching stocks discards late history and a retry failure retains the cache', async (context) => {
+  const old = deferred()
+  context.mock.method(api, 'stockHistory', () => old.promise)
+  let symbol = '688900'
+  const state = mountComposable(() => useStockHistory({ isOpen: () => true, currentSymbol: () => symbol }))
+  const pending = state.loadHistory(symbol)
+  state.resetHistory()
+  symbol = '688901'
+  context.mock.method(api, 'stockHistory', async () => ({ symbol, bars: [{ close_price: '10' }] }))
+  await state.loadHistory(symbol)
+  old.resolve({ symbol: '688900', bars: [] })
+  await pending
+  assert.equal(state.history.value.symbol, '688901')
+  context.mock.method(api, 'stockHistory', async () => { throw new Error('offline') })
+  await state.loadHistory(symbol)
+  assert.equal(state.history.value.bars.length, 1)
+  assert.equal(state.error.value, 'offline')
+})
+
+test('directory search invalidates old responses immediately and debounces input', async (context) => {
+  const old = deferred()
+  const current = deferred()
+  context.mock.method(api, 'searchSecurities', () => old.promise)
+  const search = mountComposable(useSecuritySearch)
+  const loadingOld = search.refresh()
+  search.keyword.value = '688900'
+  old.resolve({ items: [{ symbol: 'old' }] })
+  await loadingOld
+  assert.equal(search.result.value, null)
+  assert.equal(search.loading.value, true)
+  context.mock.method(api, 'searchSecurities', () => current.promise)
+  runTimers(300)
+  current.resolve({ items: [{ symbol: '688900' }], quota: { used: 1, limit: 30 } })
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(search.result.value.items[0].symbol, '688900')
+  assert.equal(search.loading.value, false)
+})
+
+test('search error can retry and unmount discards a pending response', async (context) => {
+  context.mock.method(api, 'searchSecurities', async () => { throw new Error('offline') })
+  const search = mountComposable(useSecuritySearch)
+  await search.refresh()
+  assert.equal(search.error.value, 'offline')
+  const pending = deferred()
+  context.mock.method(api, 'searchSecurities', () => pending.promise)
+  const request = search.refresh()
+  mounted[0].unmount()
+  pending.resolve({ items: [{ symbol: 'old' }] })
+  await request
+  assert.equal(search.result.value, null)
+})
+
+test('watchlist reset rejects stale account results and coalesces duplicate clicks', async (context) => {
+  const pending = deferred()
+  let calls = 0
+  context.mock.method(api, 'addWatchlist', () => { calls++; return pending.promise })
+  const list = mountComposable(useWatchlist)
+  const a = list.toggleWatchlist('688900')
+  const b = list.toggleWatchlist('688900')
+  assert.equal(a, b)
+  list.resetWatchlist()
+  pending.resolve({ symbol: '688900' })
+  await a
+  assert.equal(calls, 1)
+  assert.deepEqual(list.symbols.value, [])
+})
+
+test('stopped market refresh cannot publish another account stocks', async (context) => {
+  const pending = deferred()
+  context.mock.method(api, 'stocks', () => pending.promise)
+  context.mock.method(api, 'marketStatus', async () => null)
+  context.mock.method(api, 'marketIndices', async () => [])
+  globalThis.document.removeEventListener = () => {}
+  const data = mountComposable(useMarketData)
+  const old = data.refreshMarket()
+  data.stopMarketPolling()
+  context.mock.method(api, 'stocks', async () => [{ symbol: 'new' }])
+  await data.refreshMarket()
+  pending.resolve([{ symbol: 'private-old' }])
+  await old
+  assert.deepEqual(data.stocks.value.map(s => s.symbol), ['new'])
 })
 
 test('only the latest preview response can update the order ticket', async (context) => {

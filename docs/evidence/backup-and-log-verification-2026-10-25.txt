@@ -1,0 +1,84 @@
+ubuntu@VM-4-5-ubuntu:~$ sudo -i
+root@VM-4-5-ubuntu:~# systemctl show monipan-backup.timer --no-pager -p ActiveState -p UnitFileState -p LastTriggerUSec
+systemctl list-timers --all --no-pager monipan-backup.timer
+systemctl show monipan-backup.service --no-pager -p Result -p ExecMainStatus -p ExecMainExitTimestamp
+journalctl -u monipan-backup.service --since '2026-10-19 00:00:00' --no-pager -n 100 -o short-iso
+
+(
+  cd /opt/monipan/backups/daily || exit 1
+  for backup in monipan-*.sql.gz; do
+    [ -f "$backup" ] || continue
+    gzip -t "$backup" && sha256sum -c "$backup.sha256"
+  done
+)
+
+(
+  cd /opt/monipan || exit 1
+  for service in backend frontend mysql; do
+    container_id=$(docker compose --project-name monipan --file compose.yaml ps -q "$service")
+    [ -n "$container_id" ] && docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}} driver={{.HostConfig.LogConfig.Type}} max-size={{index .HostConfig.LogConfig.Config "max-size"}} max-file={{index .HostConfig.LogConfig.Config "max-file"}}' "$container_id"
+  done
+)
+LastTriggerUSec=Sun 2026-10-25 03:00:01 CST
+ActiveState=active
+UnitFileState=enabled
+NEXT                        LEFT LAST                         PASSED UNIT                 ACTIVATES             
+Mon 2026-10-26 03:00:00 CST  11h Sun 2026-10-25 03:00:01 CST 12h ago monipan-backup.timer monipan-backup.service
+
+1 timers listed.
+Result=success
+ExecMainExitTimestamp=Sun 2026-10-25 03:00:02 CST
+ExecMainStatus=0
+2026-10-19T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-19T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[2304602]: monipan-20261018T190001Z.sql.gz: OK
+2026-10-19T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[2304530]: Backup created: /opt/monipan/backups/daily/monipan-20261018T190001Z.sql.gz
+2026-10-19T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[2304530]: Checksum created: /opt/monipan/backups/daily/monipan-20261018T190001Z.sql.gz.sha256
+2026-10-19T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-19T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+2026-10-20T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-20T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[3206806]: monipan-20261019T190001Z.sql.gz: OK
+2026-10-20T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[3206734]: Backup created: /opt/monipan/backups/daily/monipan-20261019T190001Z.sql.gz
+2026-10-20T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[3206734]: Checksum created: /opt/monipan/backups/daily/monipan-20261019T190001Z.sql.gz.sha256
+2026-10-20T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-20T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+2026-10-21T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-21T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[4111260]: monipan-20261020T190001Z.sql.gz: OK
+2026-10-21T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[4111176]: Backup created: /opt/monipan/backups/daily/monipan-20261020T190001Z.sql.gz
+2026-10-21T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[4111176]: Checksum created: /opt/monipan/backups/daily/monipan-20261020T190001Z.sql.gz.sha256
+2026-10-21T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-21T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+2026-10-22T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-22T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[817596]: monipan-20261021T190001Z.sql.gz: OK
+2026-10-22T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[817505]: Backup created: /opt/monipan/backups/daily/monipan-20261021T190001Z.sql.gz
+2026-10-22T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[817505]: Checksum created: /opt/monipan/backups/daily/monipan-20261021T190001Z.sql.gz.sha256
+2026-10-22T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-22T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+2026-10-23T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-23T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[1718926]: monipan-20261022T190001Z.sql.gz: OK
+2026-10-23T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[1718858]: Backup created: /opt/monipan/backups/daily/monipan-20261022T190001Z.sql.gz
+2026-10-23T03:00:01+08:00 VM-4-5-ubuntu monipan-backup[1718858]: Checksum created: /opt/monipan/backups/daily/monipan-20261022T190001Z.sql.gz.sha256
+2026-10-23T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-23T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+2026-10-24T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-24T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[2621198]: monipan-20261023T190001Z.sql.gz: OK
+2026-10-24T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[2621129]: Backup created: /opt/monipan/backups/daily/monipan-20261023T190001Z.sql.gz
+2026-10-24T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[2621129]: Checksum created: /opt/monipan/backups/daily/monipan-20261023T190001Z.sql.gz.sha256
+2026-10-24T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-24T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+2026-10-25T03:00:01+08:00 VM-4-5-ubuntu systemd[1]: Starting monipan-backup.service - MoniPan checked MySQL backup...
+2026-10-25T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[3523321]: monipan-20261024T190001Z.sql.gz: OK
+2026-10-25T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[3523230]: Backup created: /opt/monipan/backups/daily/monipan-20261024T190001Z.sql.gz
+2026-10-25T03:00:02+08:00 VM-4-5-ubuntu monipan-backup[3523230]: Checksum created: /opt/monipan/backups/daily/monipan-20261024T190001Z.sql.gz.sha256
+2026-10-25T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: monipan-backup.service: Deactivated successfully.
+2026-10-25T03:00:02+08:00 VM-4-5-ubuntu systemd[1]: Finished monipan-backup.service - MoniPan checked MySQL backup.
+monipan-20261018T074648Z.sql.gz: OK
+monipan-20261018T190001Z.sql.gz: OK
+monipan-20261019T190001Z.sql.gz: OK
+monipan-20261020T190001Z.sql.gz: OK
+monipan-20261021T190001Z.sql.gz: OK
+monipan-20261022T190001Z.sql.gz: OK
+monipan-20261023T190001Z.sql.gz: OK
+monipan-20261024T190001Z.sql.gz: OK
+backend driver=json-file max-size=10m max-file=5
+frontend driver=json-file max-size=10m max-file=5
+mysql driver=json-file max-size=10m max-file=5

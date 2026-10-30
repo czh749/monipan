@@ -58,6 +58,11 @@ class StockOut(BaseModel):
     name: str
     exchange: str
     industry: str
+    research_only: bool = False
+    quote_status: Literal["pending", "ready"] = "ready"
+    quote_state: Literal["pending", "failed", "ready", "delayed", "stale", "closed"] = "ready"
+    quote_message: str = ""
+    quote_retry_after_seconds: int | None = None
     prev_close: Decimal
     price: Decimal
     open_price: Decimal
@@ -152,6 +157,9 @@ class StockHistoryOut(BaseModel):
     cached_count: int
     target_count: int
     complete: bool
+    preparation_state: Literal["pending", "failed", "ready", "partial"] = "pending"
+    preparation_message: str = ""
+    retry_after_seconds: int | None = None
     bars: list[StockBarOut]
 
 

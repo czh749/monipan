@@ -3,6 +3,11 @@ export interface Stock {
   name: string
   exchange: string
   industry: string
+  research_only?: boolean
+  quote_status?: 'pending' | 'ready'
+  quote_state?: 'pending' | 'failed' | 'ready' | 'delayed' | 'stale' | 'closed'
+  quote_message?: string
+  quote_retry_after_seconds?: number | null
   prev_close: string
   price: string
   open_price: string
@@ -13,6 +18,16 @@ export interface Stock {
   change_percent: string
   quote_source_at: string | null
   updated_at: string
+}
+
+export interface SecuritySearchResult {
+  items: Array<{
+    symbol: string; name: string; exchange: string; board: string; industry: string
+    listing_date: string | null; source_url: string; collected_at: string
+    trading_status: 'UNKNOWN'; research_only: boolean; is_default: boolean; added: boolean
+  }>
+  catalog: { state: 'empty' | 'stale' | 'ready'; count: number; collected_at: string | null }
+  quota: { used: number; limit: number }
 }
 
 export type MarketDataStatus =
@@ -215,6 +230,9 @@ export interface StockHistory {
   cached_count: number
   target_count: number
   complete: boolean
+  preparation_state?: 'pending' | 'failed' | 'ready' | 'partial'
+  preparation_message?: string
+  retry_after_seconds?: number | null
   bars: StockBar[]
 }
 

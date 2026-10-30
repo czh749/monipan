@@ -18,7 +18,7 @@ Docker 部署：
 
 生命周期流程：
     启动阶段（yield 之前）：
-        1. 自动创建数据库表（如果不存在）
+        1. 校验数据库迁移版本（开发环境空库通过迁移初始化）
         2. 初始化市场种子数据（200 只股票 + 5 个指数）
         3. 启动后台行情循环任务
 
@@ -43,7 +43,8 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .api import router
-from .database import Base, SessionLocal, engine, migrate_database
+from .database import SessionLocal, engine
+from .schema import SchemaStateError, prepare_database, require_current
 from .models import SimulationAccount
 from .runtime_config import validate_runtime_configuration
 from .seed import seed_database
@@ -59,6 +60,7 @@ from .services.trading import expire_pending_orders
 from .services.review import rebuild_daily_snapshots
 from .services.market.constants import CHINA_TZ
 from .services.market.raw_close import backfill_raw_closes_once
+from .services.market.tick import tick_pending_research
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -102,6 +104,11 @@ def expire_orders_once() -> int:
     """Close day orders even when no market refresh runs after 15:00."""
     with SessionLocal() as db:
         return expire_pending_orders(db)
+
+
+def refresh_pending_research_once() -> int:
+    with SessionLocal() as db:
+        return tick_pending_research(db)
 
 
 def refresh_daily_snapshots_once() -> int:
@@ -172,7 +179,15 @@ async def market_loop() -> None:
             )
         else:
             sleep_seconds = interval if session_open else 60
-        await asyncio.sleep(sleep_seconds)
+        # One executor, including outside trading hours: newly added identities
+        # get a bounded first quote without waiting for the next session.
+        deadline = asyncio.get_running_loop().time() + sleep_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(min(20, max(0, deadline - asyncio.get_running_loop().time())))
+            try:
+                await asyncio.to_thread(refresh_pending_research_once)
+            except Exception:
+                logger.warning("新增研究股票行情暂未就绪，五分钟后重试", exc_info=True)
 
 
 def backfill_history_once(after_stock_id: int) -> tuple[int, str | None, bool]:
@@ -259,11 +274,9 @@ async def lifespan(_app: FastAPI):
     runtime = validate_runtime_configuration()
     logger.info("运行配置校验完成：environment=%s", runtime.environment)
 
-    # 1. 自动创建数据库表
-    #    create_all 只会创建不存在的表，已存在的表不受影响
-    #    bind=engine 指定使用哪个数据库引擎
-    Base.metadata.create_all(bind=engine)
-    migrate_database()
+    # 1. 生产启动只校验版本。迁移必须在发布流程中显式执行。
+    #    开发空库通过同一份冻结基线初始化，已有无版本库需要显式核验接入。
+    prepare_database(engine, production=runtime.production)
 
     # 2. 初始化种子数据
     #    幂等操作：保留已有数据，并按股票代码补齐到 200 只
@@ -415,6 +428,13 @@ def readiness():
     try:
         with SessionLocal() as db:
             db.execute(text("SELECT 1")).scalar_one()
+            require_current(db.connection())
+    except SchemaStateError:
+        logger.warning("就绪检查失败：schema=out_of_date")
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "database": "ok", "schema": "out_of_date"},
+        )
     except SQLAlchemyError as exc:
         logger.warning(
             "就绪检查失败：database=unavailable error_type=%s",
