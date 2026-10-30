@@ -93,6 +93,6 @@ python scripts/lock_backend.py
 
 GitHub Actions 配置已在本地编写，未推送或触发远程运行。用户随后启动 Docker，本轮已继续完成当前前后端 Dockerfile 构建、Linux/MySQL 专项、Node.js 22 前端测试及隔离站点功能验证，见 [Docker 验证记录](stage1-docker-verification-2026-10-28.md)。这补齐了本地容器和 Node.js 22 的证据，仍不等于 GitHub CI 已远程运行或已部署生产。
 
-上线前还需要：兼容新 schema 的回退/前向修复演练、受限规模的行情质量验收、首次报价失败与单股陈旧提示，以及既有邮件收件与 timer 等生产门槛。自动检查不会模拟真实行情源容量、邮件实际送达或生产网络。
+2026-10-30 更新：远程 CI 已运行通过，且已补齐兼容镜像回退演练、受限真实取数、首次失败及单股陈旧提示；完整结果和仍待正式服务器执行的门槛见 [最新发布准备记录](stage1-release-readiness-2026-10-30.md)。自动检查不会证明邮件实际送达或生产网络容量。
 
 服务容器的创建与回收方式参考 [GitHub 官方说明](https://docs.github.com/en/actions/tutorials/use-containerized-services/use-docker-service-containers)。

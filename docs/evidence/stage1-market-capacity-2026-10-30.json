@@ -1,0 +1,50 @@
+{
+  "observed_at": "2026-10-30T04:59:49.541268+00:00",
+  "scope": "one real-source round, no database writes",
+  "requested": 800,
+  "session": "lunch_break",
+  "quote_pass": true,
+  "history_pass": true,
+  "history": [
+    {
+      "symbol": "000006",
+      "bars": 90,
+      "passed": true
+    },
+    {
+      "symbol": "000007",
+      "bars": 90,
+      "passed": true
+    },
+    {
+      "symbol": "000008",
+      "bars": 90,
+      "passed": true
+    }
+  ],
+  "available": 799,
+  "coverage_percent": 99.88,
+  "missing": [
+    "601989"
+  ],
+  "batch_stats": {
+    "total_batches": 4,
+    "successful_batches": 4,
+    "failed_batches": 0,
+    "retried_batches": 1,
+    "recovered_batches": 1,
+    "request_attempts": 5,
+    "pause_count": 0,
+    "fallback_used": true,
+    "elapsed_seconds": 23.2
+  },
+  "trade_dates": [
+    "2026-10-30"
+  ],
+  "elapsed_seconds": 31.01,
+  "status": "passed",
+  "limits": [
+    "Not a sustained intraday capacity test",
+    "Does not verify production network or AI calls"
+  ]
+}

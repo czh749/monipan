@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-30",
+  "commit": "ae813233507b1d003a26222fbf48f79b29d712d8",
+  "run_id": 41009002552,
+  "url": "https://github.com/czh749/monipan/actions/runs/41009002552",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {
+      "id": 123910378650,
+      "name": "MySQL migration and concurrency",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 123910378840,
+      "name": "Frontend regression and build",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 123910378927,
+      "name": "Backend regression",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "backend": {
+    "passed": 373,
+    "skipped_historical_archives": 34
+  },
+  "frontend": {
+    "passed": 19,
+    "typecheck": "passed",
+    "build": "passed"
+  },
+  "mysql": {
+    "passed": 1,
+    "skipped": 0,
+    "recovery": "startup_failure_then_maintenance_recovery_verified"
+  }
+}
