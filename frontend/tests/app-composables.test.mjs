@@ -11,6 +11,7 @@ let api
 let useSecuritySearch
 let useWatchlist
 let useMarketData
+let useStockHistory
 let timers
 let mounted
 const originalGlobals = ['window', 'document'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)])
@@ -73,6 +74,7 @@ before(async () => {
   ;({ useSecuritySearch } = await server.ssrLoadModule('/src/composables/useSecuritySearch.ts'))
   ;({ useWatchlist } = await server.ssrLoadModule('/src/composables/useWatchlist.ts'))
   ;({ useMarketData } = await server.ssrLoadModule('/src/composables/useMarketData.ts'))
+  ;({ useStockHistory } = await server.ssrLoadModule('/src/composables/useStockHistory.ts'))
 })
 
 after(async () => { await server?.close() })
@@ -109,6 +111,42 @@ test('research-only and pending stocks never request an order preview', async (c
   options.selectedStock.value = { symbol: '600519', quote_status: 'pending' }
   assert.equal(await entry.refreshOrderPreview(), null)
   assert.equal(calls, 0)
+})
+
+test('history polling reads only cache and unmount cancels the next poll', async (context) => {
+  const calls = []
+  context.mock.method(api, 'stockHistory', async (symbol, refresh) => {
+    calls.push([symbol, refresh])
+    return { symbol, complete: false, bars: [], preparation_state: 'failed' }
+  })
+  const state = mountComposable(() => useStockHistory({ isOpen: () => true, currentSymbol: () => '688900' }))
+  await state.loadHistory('688900')
+  runTimers(30_000)
+  await Promise.resolve(); await Promise.resolve()
+  assert.deepEqual(calls, [['688900', true], ['688900', false]])
+  mounted[0].unmount()
+  runTimers(30_000)
+  assert.equal(calls.length, 2)
+  assert.equal(state.history.value, null)
+})
+
+test('switching stocks discards late history and a retry failure retains the cache', async (context) => {
+  const old = deferred()
+  context.mock.method(api, 'stockHistory', () => old.promise)
+  let symbol = '688900'
+  const state = mountComposable(() => useStockHistory({ isOpen: () => true, currentSymbol: () => symbol }))
+  const pending = state.loadHistory(symbol)
+  state.resetHistory()
+  symbol = '688901'
+  context.mock.method(api, 'stockHistory', async () => ({ symbol, bars: [{ close_price: '10' }] }))
+  await state.loadHistory(symbol)
+  old.resolve({ symbol: '688900', bars: [] })
+  await pending
+  assert.equal(state.history.value.symbol, '688901')
+  context.mock.method(api, 'stockHistory', async () => { throw new Error('offline') })
+  await state.loadHistory(symbol)
+  assert.equal(state.history.value.bars.length, 1)
+  assert.equal(state.error.value, 'offline')
 })
 
 test('directory search invalidates old responses immediately and debounces input', async (context) => {

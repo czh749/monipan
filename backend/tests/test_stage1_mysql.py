@@ -28,7 +28,7 @@ from app.services import trading
 from .test_security_catalog import records
 
 
-def test_real_mysql_preserves_baseline_and_serializes_quota_and_shared_creation(monkeypatch):
+def test_real_mysql_preserves_baseline_and_serializes_quota_and_shared_creation(monkeypatch, record_testsuite_property):
     raw_url = os.getenv("MONIPAN_STAGE1_MYSQL_URL")
     if not raw_url:
         pytest.skip("Requires an explicitly owned empty local MySQL Stage 1 database")
@@ -119,5 +119,81 @@ def test_real_mysql_preserves_baseline_and_serializes_quota_and_shared_creation(
                 assert error.value.status_code == 403
             assert trading.match_pending_orders(db) == 0
             assert db.scalar(select(func.count()).select_from(Trade)) == old_trades
+        # A bad candidate really fails its startup checks. Recovery uses the
+        # upgraded schema with discovery disabled, retaining all trading guards.
+        from fastapi.testclient import TestClient
+        from app import main
+        from app.auth import get_current_account, get_current_user
+        from app.database import get_db
+        monkeypatch.setattr(main, "engine", engine)
+        monkeypatch.setattr(main, "SessionLocal", factory)
+        monkeypatch.setenv("MONIPAN_DATABASE_URL", raw_url)
+        monkeypatch.setenv("MONIPAN_ENVIRONMENT", "production")
+        monkeypatch.setenv("MONIPAN_DISABLE_MARKET_LOOP", "1")
+        monkeypatch.setenv("MONIPAN_COOKIE_SECURE", "0")
+        protected_tables = {"users", "simulation_accounts", "positions", "orders", "trades",
+                            "account_transactions", "watchlist_items", "agent_runs", "agent_evidence",
+                            "agent_recommendations"} & set(original.tables)
+        def protected_snapshot():
+            current = MetaData()
+            current.reflect(bind=engine)
+            with engine.connect() as connection:
+                return {name: connection.execute(select(current.tables[name]).order_by(
+                    *current.tables[name].primary_key.columns)).all() for name in protected_tables}
+        before_recovery = protected_snapshot()
+        with pytest.raises(RuntimeError):
+            with TestClient(main.app, base_url="https://testserver"):
+                pass
+        monkeypatch.setenv("MONIPAN_COOKIE_SECURE", "1")
+        monkeypatch.setenv("MONIPAN_RESEARCH_ENABLED", "0")
+        previous_overrides = dict(main.app.dependency_overrides)
+        def database():
+            with factory() as session:
+                yield session
+        with factory() as db:
+            recovered_account = db.get(SimulationAccount, accounts[1])
+            recovered_user = db.get(User, recovered_account.user_id)
+            recovered_account.user = recovered_user
+        main.app.dependency_overrides[get_db] = database
+        main.app.dependency_overrides[get_current_user] = lambda: recovered_user
+        main.app.dependency_overrides[get_current_account] = lambda: recovered_account
+        try:
+            with TestClient(main.app, base_url="https://testserver") as client:
+                assert client.get("/readyz").status_code == 200
+                assert client.get("/api/account").status_code == 200
+                assert client.get("/api/securities/search?keyword=688931").status_code == 503
+                assert client.post("/api/watchlist/688901").status_code == 503
+                assert client.get("/api/stocks").status_code == 200
+            assert protected_snapshot() == before_recovery
+            with engine.connect() as connection:
+                require_current(connection)
+            # Exercise the exact read-only probe delivered for server checks.
+            import importlib.util
+            import contextlib
+            import io
+            import json
+            import app.database as database_module
+            probe_path = Path(__file__).resolve().parents[2] / "scripts/stage1_preflight.py"
+            spec = importlib.util.spec_from_file_location("stage1_preflight", probe_path)
+            preflight = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(preflight)
+            monkeypatch.setattr(database_module, "engine", engine)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exec(preflight.PROBE, {})
+            preflight_report = json.loads(output.getvalue())
+            assert preflight_report["schema_versions"] == ["20261026_02"]
+            assert preflight_report["tables"]["users"]["rows"] == len(before_recovery["users"])
+            assert protected_snapshot() == before_recovery
+            with factory() as db:
+                for function in (trading.build_order_preview, trading.place_order):
+                    with pytest.raises(HTTPException) as error:
+                        function(db, db.get(SimulationAccount, accounts[1]), "688931", "BUY", 100)
+                    assert error.value.status_code == 403
+            record_testsuite_property("recovery", "startup_failure_then_maintenance_recovery_verified")
+            record_testsuite_property("preserved_tables", ",".join(sorted(protected_tables)))
+        finally:
+            main.app.dependency_overrides.clear()
+            main.app.dependency_overrides.update(previous_overrides)
     finally:
         engine.dispose()

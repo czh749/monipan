@@ -2,6 +2,7 @@
 import { gsap } from 'gsap'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
+import { useStockHistory } from '../composables/useStockHistory'
 import type {
   CompanyAnnouncement,
   FinancialReport,
@@ -12,7 +13,6 @@ import type {
   StockAnnouncements,
   StockBar,
   StockFundamentals,
-  StockHistory,
   StockRegulatoryLetters,
 } from '../types'
 import { compactVolume, dateTime, formatNumber, riseClass } from '../utils/formatters'
@@ -31,9 +31,9 @@ const emit = defineEmits<{
 type DrawerTab = 'market' | 'fundamentals' | 'events' | 'announcements'
 type AnnouncementRange = 30 | 90 | 365
 
-const history = ref<StockHistory | null>(null)
-const loading = ref(false)
-const error = ref('')
+const { history, loading, error, loadHistory, resetHistory } = useStockHistory({
+  isOpen: () => props.open, currentSymbol: () => props.stock?.symbol,
+})
 const hoveredIndex = ref<number | null>(null)
 const activeTab = ref<DrawerTab>('market')
 const fundamentals = ref<StockFundamentals | null>(null)
@@ -54,8 +54,6 @@ const announcementRanges: { value: AnnouncementRange; label: string }[] = [
   { value: 365, label: '1年' },
 ]
 let fundamentalsRequestId = 0
-let historyRequestId = 0
-let historyTimer: ReturnType<typeof window.setTimeout> | undefined
 let announcementsRequestId = 0
 let drawerMotion: ReturnType<typeof gsap.matchMedia> | null = null
 
@@ -536,29 +534,6 @@ function selectLatestBar() {
   }
 }
 
-async function loadHistory(symbol: string, refresh = true) {
-  const requestId = ++historyRequestId
-  if (historyTimer !== undefined) window.clearTimeout(historyTimer)
-  loading.value = refresh || !history.value
-  error.value = ''
-  try {
-    const result = await api.stockHistory(symbol, refresh)
-    if (requestId === historyRequestId) history.value = result
-  } catch (reason) {
-    if (requestId === historyRequestId) {
-      error.value = reason instanceof Error ? reason.message : '无法加载历史行情'
-    }
-  } finally {
-    if (requestId === historyRequestId) {
-      loading.value = false
-      if (props.open && props.stock?.symbol === symbol) {
-        // Poll the local cache only; automatic UI refresh never calls the provider.
-        historyTimer = window.setTimeout(() => { void loadHistory(symbol, false) }, 30_000)
-      }
-    }
-  }
-}
-
 async function loadFundamentals(symbol: string) {
   const requestId = ++fundamentalsRequestId
   fundamentalsLoading.value = true
@@ -690,8 +665,7 @@ watch(
   [() => props.open, () => props.stock?.symbol] as const,
   ([open, symbol], [previousOpen, previousSymbol]) => {
     hoveredIndex.value = null
-    if (historyTimer !== undefined) window.clearTimeout(historyTimer)
-    historyRequestId += 1
+    resetHistory()
     if (!open || !symbol) return
 
     const drawerJustOpened = !previousOpen
@@ -699,7 +673,6 @@ watch(
     if (!drawerJustOpened && !stockActuallyChanged) return
 
     activeTab.value = 'market'
-    history.value = null
     fundamentals.value = null
     fundamentalsError.value = ''
     fundamentalsLoading.value = false
@@ -724,8 +697,6 @@ function onKeydown(event: KeyboardEvent) {
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
-  historyRequestId += 1
-  if (historyTimer !== undefined) window.clearTimeout(historyTimer)
   window.removeEventListener('keydown', onKeydown)
   drawerMotion?.revert()
 })
