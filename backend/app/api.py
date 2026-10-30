@@ -337,12 +337,13 @@ def get_stock(symbol: str, db: Session = Depends(get_db)) -> dict:
 def get_stock_history(
     symbol: str,
     limit: int = Query(default=90, ge=20, le=240),
+    refresh: bool = Query(default=True),
     db: Session = Depends(get_db),
 ) -> dict:
     stock = db.scalar(select(Stock).where(Stock.symbol == symbol))
     if not stock:
         raise HTTPException(status_code=404, detail="股票不存在")
-    source, bars = stock_history(db, stock, limit)
+    source, bars = stock_history(db, stock, limit, refresh=refresh)
     target_count = min(limit, HISTORY_CACHE_TARGET_BARS)
     serialized_bars: list[dict] = []
     for index, bar in enumerate(bars):
@@ -376,9 +377,11 @@ def get_stock_history(
                 "turnover": bar.turnover,
             }
         )
+    from .services.market.preparation import history_preparation
     return {
         "symbol": symbol,
         "period": "DAY",
+        **history_preparation(symbol, len(bars) >= target_count),
         "source": source,
         "cached_count": len(bars),
         "target_count": target_count,
@@ -563,6 +566,8 @@ def search_securities(
     account: SimulationAccount = Depends(get_current_account),
     db: Session = Depends(get_db),
 ):
+    from .services.research_access import require_research_enabled
+    require_research_enabled()
     return search_directory(db, keyword, account.id, limit=limit)
 
 

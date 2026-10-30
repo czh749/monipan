@@ -15,7 +15,7 @@ import type {
   StockHistory,
   StockRegulatoryLetters,
 } from '../types'
-import { compactVolume, formatNumber, riseClass } from '../utils/formatters'
+import { compactVolume, dateTime, formatNumber, riseClass } from '../utils/formatters'
 
 const props = defineProps<{
   open: boolean
@@ -54,6 +54,8 @@ const announcementRanges: { value: AnnouncementRange; label: string }[] = [
   { value: 365, label: '1年' },
 ]
 let fundamentalsRequestId = 0
+let historyRequestId = 0
+let historyTimer: ReturnType<typeof window.setTimeout> | undefined
 let announcementsRequestId = 0
 let drawerMotion: ReturnType<typeof gsap.matchMedia> | null = null
 
@@ -534,16 +536,26 @@ function selectLatestBar() {
   }
 }
 
-async function loadHistory(symbol: string) {
-  loading.value = true
+async function loadHistory(symbol: string, refresh = true) {
+  const requestId = ++historyRequestId
+  if (historyTimer !== undefined) window.clearTimeout(historyTimer)
+  loading.value = refresh || !history.value
   error.value = ''
   try {
-    history.value = await api.stockHistory(symbol)
+    const result = await api.stockHistory(symbol, refresh)
+    if (requestId === historyRequestId) history.value = result
   } catch (reason) {
-    history.value = null
-    error.value = reason instanceof Error ? reason.message : '无法加载历史行情'
+    if (requestId === historyRequestId) {
+      error.value = reason instanceof Error ? reason.message : '无法加载历史行情'
+    }
   } finally {
-    loading.value = false
+    if (requestId === historyRequestId) {
+      loading.value = false
+      if (props.open && props.stock?.symbol === symbol) {
+        // Poll the local cache only; automatic UI refresh never calls the provider.
+        historyTimer = window.setTimeout(() => { void loadHistory(symbol, false) }, 30_000)
+      }
+    }
   }
 }
 
@@ -678,6 +690,8 @@ watch(
   [() => props.open, () => props.stock?.symbol] as const,
   ([open, symbol], [previousOpen, previousSymbol]) => {
     hoveredIndex.value = null
+    if (historyTimer !== undefined) window.clearTimeout(historyTimer)
+    historyRequestId += 1
     if (!open || !symbol) return
 
     const drawerJustOpened = !previousOpen
@@ -685,6 +699,7 @@ watch(
     if (!drawerJustOpened && !stockActuallyChanged) return
 
     activeTab.value = 'market'
+    history.value = null
     fundamentals.value = null
     fundamentalsError.value = ''
     fundamentalsLoading.value = false
@@ -709,6 +724,8 @@ function onKeydown(event: KeyboardEvent) {
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
+  historyRequestId += 1
+  if (historyTimer !== undefined) window.clearTimeout(historyTimer)
   window.removeEventListener('keydown', onKeydown)
   drawerMotion?.revert()
 })
@@ -741,7 +758,8 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <p v-if="stock.research_only" class="research-notice">仅研究 · 尚未开放模拟交易<span v-if="stock.quote_status === 'pending'"> · 等待首次行情，财务与公告仍可按需查看</span></p>
+        <p v-if="stock.research_only" class="research-notice">仅研究 · 尚未开放模拟交易</p>
+        <p v-if="stock.quote_message" class="research-notice" role="status">{{ stock.quote_message }} · 行情时间 {{ dateTime(stock.quote_source_at) }}</p>
         <div v-if="stock.quote_status !== 'pending'" class="drawer-quote">
           <div :class="riseClass(stock.change)">
             <strong>{{ formatNumber(stock.price) }}</strong>
@@ -840,9 +858,10 @@ onBeforeUnmount(() => {
               <i></i>
               <span>
                 <strong>{{ history.cached_count }} / {{ history.target_count }}</strong>
-                {{ history.complete ? '历史缓存已就绪' : '后台补全中' }}
+                {{ history.preparation_message || (history.complete ? '历史缓存已就绪' : '等待历史行情补齐') }}
               </span>
             </div>
+            <button v-if="error || (history && !history.complete) || history?.preparation_state === 'failed'" type="button" :disabled="loading" @click="loadHistory(stock.symbol)">重试历史行情</button>
           </div>
           <div v-if="loading" class="drawer-state"><span class="loading-dot"></span>正在装载价格结构…</div>
           <div v-else-if="error" class="drawer-state error-state">{{ error }}</div>

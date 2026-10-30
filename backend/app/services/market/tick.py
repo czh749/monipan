@@ -14,6 +14,7 @@ from .constants import logger
 from .history import upsert_latest_stock_bar
 from .raw_close import upsert_quote_raw_close
 from .types import MARKET_REFRESH_STATE
+from .preparation import record_fetch
 
 
 def tick_market_indices(db: Session) -> int:
@@ -67,6 +68,7 @@ def tick_market(db: Session) -> int:
     生产环境只使用真实东财行情，不提供随机行情回退。
     """
     MARKET_REFRESH_STATE.begin()
+    attempted_symbols = []
     try:
         # 延迟导入：测试通过 monkeypatch.setattr(market, "fetch_eastmoney_quotes", ...)
         # 替换行情源，必须从包级别查找才能看到 patch 后的值。
@@ -76,7 +78,10 @@ def tick_market(db: Session) -> int:
         stocks = db.scalars(
             select(Stock).where(active_stock_condition()).order_by(Stock.updated_at.asc(), Stock.id.asc())
         ).all()
-        quotes = fetch_eastmoney_quotes([stock.symbol for stock in stocks])
+        attempted_symbols = [stock.symbol for stock in stocks]
+        quotes = fetch_eastmoney_quotes(attempted_symbols)
+        for stock in stocks:
+            record_fetch("quote", stock.symbol, failed=stock.symbol not in quotes, retry_seconds=300)
         batch_stats = getattr(quotes, "stats", None)
         updated_count = apply_quotes(db, stocks, quotes)
         db.commit()
@@ -90,6 +95,8 @@ def tick_market(db: Session) -> int:
             logger.exception("限价委托撮合失败，行情快照已保留")
     except Exception as exc:
         db.rollback()
+        for symbol in attempted_symbols:
+            record_fetch("quote", symbol, failed=True, retry_seconds=300)
         MARKET_REFRESH_STATE.fail(exc)
         raise
 
@@ -168,7 +175,14 @@ def tick_pending_research(db: Session, *, monotonic_now=None) -> int:
         return 0
     for stock in candidates:
         _PENDING_ATTEMPTS[stock.symbol] = observed
-    quotes = fetch_eastmoney_quotes([s.symbol for s in candidates])
+    try:
+        quotes = fetch_eastmoney_quotes([s.symbol for s in candidates])
+    except Exception:
+        for stock in candidates:
+            record_fetch("quote", stock.symbol, failed=True, retry_seconds=300)
+        raise
+    for stock in candidates:
+        record_fetch("quote", stock.symbol, failed=stock.symbol not in quotes, retry_seconds=300)
     count = apply_quotes(db, candidates, quotes)
     db.commit()
     return count

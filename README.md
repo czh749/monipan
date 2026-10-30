@@ -291,21 +291,28 @@ pnpm dev
 
 ## 测试
 
-```powershell
-cd backend
-python -m pytest
-```
-
-测试环境仍使用独立的临时 SQLite 数据库，不会读写 Docker 中的 MySQL 数据。
-
-前端回归测试与构建：
+在项目根目录运行一次日常检查（后端回归、前端测试、类型检查和构建）：
 
 ```powershell
-cd frontend
-pnpm test
-pnpm build
+.\backend\.venv\Scripts\python.exe scripts/check_project.py
 ```
 
-前端测试覆盖委托预览、确认、撤单、会话切换与动画清理，使用模拟 API，不会提交真实请求；构建同时执行 Vue 和 TypeScript 类型检查。
+首次准备环境时，后端安装 `backend/requirements.lock`，前端执行 `pnpm install --frozen-lockfile`。检查使用当前 Python 解释器；Linux 或已激活虚拟环境时可直接使用 `python scripts/check_project.py`。
+
+后端日常回归使用临时 SQLite，入口不会继承部署数据库、Compose 选择和真实 API 密钥。每次结果保存到 `.docker/checks/<时间与随机编号>/summary.json`，后端另有 JUnit XML；缺少工具或历史发布包的跳过会单独列出，MySQL 未运行明确标记为 `not_run`。
+
+只运行某一组，或显式执行已有隔离空库上的 MySQL 专项：
+
+```text
+python scripts/check_project.py --scope backend
+python scripts/check_project.py --scope frontend
+python scripts/check_project.py --scope mysql
+```
+
+MySQL 专项要求私有环境变量 `MONIPAN_STAGE1_MYSQL_URL` 指向 `127.0.0.1` 上名为 `monipan_stage1_test_<编号>` 的独立空库；拒绝生产库名或已有表，不会自动清空重用数据库。项目部署早已使用 MySQL，此专项验证阶段 1 的结构升级及并发正确性，不是 SQLite 转库。
+
+GitHub Actions 在代码 push、pull request 或手动触发时运行三组独立检查：后端（包含真实 Nginx）、前端、临时 MySQL 8.4 迁移与配额并发。MySQL 必须实际通过，缺少配置或跳过会失败；日常 CI 仅允许缺少已归档历史发布包这一类明确跳过。纯 Markdown 或 `docs/` 更新不自动触发。工作流不会部署，也不使用生产凭据；首次远程运行通过后，才有 CI 已验收的证据。
+
+使用说明、依赖更新和验证边界见 [自动检查说明](docs/automated-checks-2026-10-28.md)。前端测试使用模拟 API，不会提交真实请求；构建同时执行 Vue 和 TypeScript 类型检查。
 
 精确历史发布包的回归检查需要 Git 之外的已归档交付件；缺失时会明确显示跳过，发布验收可开启严格模式使缺失直接失败。监测脚本的单文件交付件由测试在临时目录自动生成。分组提交范围、复核记录及测试边界见 [阶段 0 Git 整理记录](docs/git-organization-2026-10-26.md)。

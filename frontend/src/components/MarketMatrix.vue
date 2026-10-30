@@ -158,7 +158,7 @@ onBeforeUnmount(() => selectionMotion?.revert())
               >{{ watchlist.has(stock.symbol) ? '★' : '☆' }}</button>
             </td>
             <td><strong>{{ stock.name }}</strong><span v-if="stock.research_only" class="research-badge">仅研究</span><small>{{ stock.symbol }} · {{ stock.exchange }} · {{ stock.industry }}</small></td>
-            <td :class="riseClass(stock.change)"><strong>{{ quoteNumber(stock.price) }}</strong><small v-if="stock.quote_status === 'pending'">等待首次行情</small></td>
+            <td :class="riseClass(stock.change)"><strong>{{ quoteNumber(stock.price) }}</strong><small v-if="stock.quote_state && stock.quote_state !== 'ready' && stock.quote_state !== 'closed'" :title="stock.quote_message">{{ stock.quote_message }}</small><small v-else-if="stock.quote_status === 'pending'">等待首次行情</small></td>
             <td :class="riseClass(stock.change)">{{ stock.quote_status === 'pending' ? '—' : `${Number(stock.change_percent) >= 0 ? '+' : ''}${formatNumber(stock.change_percent)}%` }}</td>
             <td :class="{ muted: Number(stock.open_price) <= 0 }">{{ quoteNumber(stock.open_price) }}</td>
             <td :class="Number(stock.high_price) > 0 ? 'rise' : 'muted'">{{ quoteNumber(stock.high_price) }}</td>

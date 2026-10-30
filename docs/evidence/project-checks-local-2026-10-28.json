@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-28",
+  "base_commit": "b991198",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.9",
+    "node": "24.13.0",
+    "pnpm": "11.7.0",
+    "dependency_install": "fresh venv, uv pip sync backend/requirements.lock, pip check passed"
+  },
+  "post_fix_clean_checkout_backend": {
+    "passed": 368,
+    "failed": 0,
+    "skipped_historical_archives": 34,
+    "unexpected_skips": 0,
+    "junit_report": ".docker/ci-clean-checkout-fd36721a666f/.docker/checks/20261028T043113Z-a5c9216b/summary.json"
+  },
+  "post_fix_focused_regression": {
+    "passed": 20,
+    "failed": 0,
+    "files": [
+      "backend/tests/test_security_catalog.py",
+      "backend/tests/test_project_checks.py"
+    ]
+  },
+  "frontend": {
+    "passed_tests": 17,
+    "typecheck": "passed",
+    "build": "passed",
+    "report": ".docker/checks/20261028T042840Z-5d634d13/summary.json"
+  },
+  "mysql": {
+    "version": "8.4.13",
+    "runtime": "isolated native Windows server",
+    "isolation": "REPEATABLE READ",
+    "fresh_database_runs_passed": 4,
+    "tests_per_run": 1,
+    "skipped": 0,
+    "all_servers_stopped": true,
+    "reports": [
+      ".docker/checks/20261028T043001Z-f8dca1bd/summary.json",
+      ".docker/checks/20261028T043118Z-d858f2c0/summary.json",
+      ".docker/checks/20261028T043134Z-bf15dd18/summary.json",
+      ".docker/checks/20261028T043147Z-78b7ef26/summary.json"
+    ],
+    "runtime_records": [
+      ".docker/mysql-check-d2c5a519ce3a/runtime.json",
+      ".docker/mysql-check-9a83844a0601/runtime.json",
+      ".docker/mysql-check-2e0636998c00/runtime.json",
+      ".docker/mysql-check-3e6bd4d193ef/runtime.json"
+    ],
+    "initial_failure": {
+      "error_codes": [
+        1213,
+        1305
+      ],
+      "cause": "Deadlock invalidated a nested savepoint and the rollback error bypassed the transaction retry",
+      "report": ".docker/checks/20261028T042649Z-dfdbcc53/summary.json"
+    },
+    "fix": "Atomic MySQL stock identity insert with no-op duplicate update, preserving existing quote fields; bounded whole-transaction retry retained"
+  },
+  "negative_check": {
+    "missing_mysql_configuration": "failed with exit code 1 as required"
+  },
+  "ci": {
+    "workflow_yaml_structure": "validated",
+    "action_commits": "resolved and pinned",
+    "actionlint": "not run; optional binary download was incomplete",
+    "remote_run": "not run",
+    "linux_container_and_node22_runtime": "not verified in this run"
+  },
+  "production": "not accessed or changed; no push or deployment",
+  "source_sha256": {
+    "scripts/check_project.py": "5dd3b94b0b101695b9f4c23846c45c33e75f11bf8193e9d13191d91ef50bab52",
+    "scripts/lock_backend.py": "04a4c164baa899039ffeb3763caa1dcfa39e31c7598d2356e7f4892fc33295af",
+    "backend/requirements.lock": "ff4a569db757d6b1c9f7e2536c73eedb177190147e5bb3665e21201d6aec628d",
+    "backend/app/services/research_watchlist.py": "eb6418ef160a4ccf16e176b7b48cf6f6d62ddb103248cf6429d490cc950be8f0",
+    "backend/tests/test_security_catalog.py": "5f1ff08ef1ab2c2dad747136b8caea261046bac5b6e06b65a9fe343dc5f24bae",
+    "backend/tests/test_stage1_mysql.py": "18a16e48b40ca720f4ffbf23338c45b49aa8b663ad4f8530023448d4c09c9743",
+    ".github/workflows/checks.yml": "be077765ca395dd0d35e8200b3271ef0a7d4053987b8c6548dd228324f7efdba"
+  }
+}

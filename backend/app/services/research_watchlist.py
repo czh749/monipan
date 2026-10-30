@@ -6,6 +6,7 @@ import time
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..models import SecurityCatalogEntry, SimulationAccount, Stock, WatchlistItem
@@ -22,13 +23,16 @@ def lock_account(db, account_id):
 
 
 def add_research_watchlist(db, account_id, symbol):
+    if symbol not in DEFAULT_SYMBOLS:
+        from .research_access import require_research_enabled
+        require_research_enabled()
     for attempt in range(3):
         try:
             return _add_research_watchlist_once(db, account_id, symbol)
         except OperationalError as exc:
             db.rollback()
-            # An InnoDB deadlock rolls back the transaction, including its
-            # savepoint. Retry the whole account-locked operation, bounded.
+            # An InnoDB deadlock rolls back the transaction. Retry the whole
+            # account-locked operation, including the current quota check.
             if not getattr(exc.orig, "args", ()) or exc.orig.args[0] not in (1205, 1213):
                 raise
             if attempt == 2:
@@ -58,20 +62,29 @@ def _add_research_watchlist_once(db, account_id, symbol):
         if sum(s.symbol not in DEFAULT_SYMBOLS for s in stocks.values()) >= CUSTOM_STOCK_LIMIT:
             raise HTTPException(409, f"池外研究股票最多 {CUSTOM_STOCK_LIMIT} 只，请先移除一只")
         if stock is None:
-            try:
-                with db.begin_nested():
-                    stock = Stock(symbol=symbol, name=entry.name, exchange=entry.exchange,
-                                  industry=entry.industry[:40], research_only=True,
-                                  price=Decimal(0), prev_close=Decimal(0), open_price=Decimal(0),
-                                  high_price=Decimal(0), low_price=Decimal(0), volume=0,
-                                  updated_at=datetime(1970, 1, 1))
-                    db.add(stock)
-                    db.flush()
-            except IntegrityError:
-                # A different account may have created the shared identity.
+            values = dict(symbol=symbol, name=entry.name, exchange=entry.exchange,
+                          industry=entry.industry[:40], research_only=True,
+                          price=Decimal(0), prev_close=Decimal(0), open_price=Decimal(0),
+                          high_price=Decimal(0), low_price=Decimal(0), volume=0,
+                          updated_at=datetime(1970, 1, 1))
+            if db.bind.dialect.name == "mysql":
+                # A deadlock invalidates all MySQL savepoints; rolling a nested
+                # insert back can mask 1213 with 1305 and bypass the outer retry.
+                # Atomic identity creation needs no savepoint. On conflict, keep
+                # every existing quote/metadata field intact.
+                statement = mysql_insert(Stock).values(**values)
+                db.execute(statement.on_duplicate_key_update(id=Stock.id))
                 stock = db.scalar(select(Stock).where(Stock.symbol == symbol).with_for_update())
-                if stock is None:
-                    raise
+            else:
+                try:
+                    with db.begin_nested():
+                        stock = Stock(**values)
+                        db.add(stock)
+                        db.flush()
+                except IntegrityError:
+                    stock = db.scalar(select(Stock).where(Stock.symbol == symbol).with_for_update())
+                    if stock is None:
+                        raise
         stock.research_only = True
     elif stock is None:
         raise HTTPException(404, "默认股票尚未初始化")

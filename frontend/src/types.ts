@@ -5,6 +5,9 @@ export interface Stock {
   industry: string
   research_only?: boolean
   quote_status?: 'pending' | 'ready'
+  quote_state?: 'pending' | 'failed' | 'ready' | 'delayed' | 'stale' | 'closed'
+  quote_message?: string
+  quote_retry_after_seconds?: number | null
   prev_close: string
   price: string
   open_price: string
@@ -227,6 +230,9 @@ export interface StockHistory {
   cached_count: number
   target_count: number
   complete: boolean
+  preparation_state?: 'pending' | 'failed' | 'ready' | 'partial'
+  preparation_message?: string
+  retry_after_seconds?: number | null
   bars: StockBar[]
 }
 

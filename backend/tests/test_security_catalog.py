@@ -109,6 +109,41 @@ def test_quota_idempotence_default_exemption_and_shared_identity(factory):
         assert search_directory(db, "688900", 2)["quota"]["used"] == 1
 
 
+def test_transient_deadlock_retries_whole_membership_transaction(factory, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    from app.services import research_watchlist as service
+    original = service._add_research_watchlist_once
+    attempts = []
+    def add(db, account_id, symbol):
+        attempts.append(symbol)
+        if len(attempts) == 1:
+            raise OperationalError("fixture", None, Exception(1213, "fixture deadlock"))
+        return original(db, account_id, symbol)
+    monkeypatch.setattr(service, "_add_research_watchlist_once", add)
+    monkeypatch.setattr(service.time, "sleep", lambda _: None)
+    with factory() as db:
+        service.add_research_watchlist(db, 1, "688900")
+        assert len(attempts) == 2
+        assert search_directory(db, "", 1)["quota"]["used"] == 1
+
+
+def test_repeated_deadlock_has_a_bounded_retry_and_safe_error(factory, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    from app.services import research_watchlist as service
+    attempts = []
+    def add(*_args):
+        attempts.append(1)
+        raise OperationalError("fixture", None, Exception(1213, "private fixture detail"))
+    monkeypatch.setattr(service, "_add_research_watchlist_once", add)
+    monkeypatch.setattr(service.time, "sleep", lambda _: None)
+    with factory() as db:
+        with pytest.raises(HTTPException) as error:
+            service.add_research_watchlist(db, 1, "688900")
+        assert len(attempts) == 3 and error.value.status_code == 503
+        assert "private" not in str(error.value.detail)
+        assert search_directory(db, "", 1)["quota"]["used"] == 0
+
+
 def test_racing_thirtieth_and_thirty_first_add_never_exceeds_quota_sqlite(factory):
     with factory() as db:
         for i in range(29):

@@ -113,6 +113,10 @@ def test_real_mysql_preserves_baseline_and_serializes_quota_and_shared_creation(
                          created_at=now.replace(tzinfo=None)))
             db.commit()
             old_trades = db.scalar(select(func.count()).select_from(Trade))
+            for function in (trading.build_order_preview, trading.place_order):
+                with pytest.raises(HTTPException) as error:
+                    function(db, db.get(SimulationAccount, accounts[1]), stock.symbol, "BUY", 100)
+                assert error.value.status_code == 403
             assert trading.match_pending_orders(db) == 0
             assert db.scalar(select(func.count()).select_from(Trade)) == old_trades
     finally:
